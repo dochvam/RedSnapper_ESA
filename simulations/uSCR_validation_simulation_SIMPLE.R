@@ -20,7 +20,6 @@ captured <- clusterEvalQ(cl, source("simulations/SCR_sim_fn.R"))
 
 result <- parLapply(cl = cl, X = 1:8, fun = run_one_uSCR_simulation)
 
-
 summary <- list.files("intermediate/sim/", pattern = "simple_", full.names = T) %>% 
   lapply(function(x) readRDS(x)$summary) %>% 
   bind_rows()

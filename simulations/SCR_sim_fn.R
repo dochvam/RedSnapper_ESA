@@ -3,6 +3,8 @@ library(readxl)
 library(terra)
 library(nimble)
 
+if (!dir.exists("intermediate")) dir.create("intermediate")
+
 #### Ben Augustine's custom sSampler ####
 
 sSampler <- nimbleFunction(
@@ -160,79 +162,28 @@ GetDetectionRate <- nimbleFunction(
   }
 )
 
-run_one_uSCR_simulation <- function(iter) {
-  set.seed(96257 + iter * 41)
+run_one_uSCR_simulation <- function(iter, M = 5000) {
+  set.seed(542389 + iter * 41)
   
-  #### Load the camera data ####
+  #### Load a premade template based on real data ####
   
-  # Get the real camera locations and deployment times for use in the simulation
-  
-  camera_dat <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx") %>% 
-    mutate(time = as.numeric(difftime(time, as_datetime("1899-12-31 00:00:00"), units = "sec"))) %>% 
-    filter(camera == "A", time >= 60 * 10) # Filter out descent/retrieval frames
-  
-  camera_counts <- camera_dat %>%
-    group_by(Station_ID, date) %>% 
-    summarize(count = max(total))
-  
-  camera_locs <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx", sheet = "StationData") %>% 
-    filter(`Camera (A or C)` == "A") %>% 
-    dplyr::select(Station_ID, Date, Time = Start_Time_GMT,
-                  Latitude = Start_Latitude, Longitude = Start_Longitude) %>% 
-    left_join(camera_counts, by = c("Station_ID", "Date" = "date"))
-  
-  
-  camera_locs$Longitude <- as.numeric(camera_locs$Longitude)
-  
-  camera_pts <- vect(camera_locs, geom = c("Longitude", "Latitude"),
-                     crs = "+proj=longlat") %>% 
-    project("ESRI:102003") %>% 
-    as.data.frame(geom = "XY")
-  
-  X <- camera_pts[, c("x", "y")]
-  X[, 1] <- X[, 1] - mean(X[, 1])
-  X[, 2] <- X[, 2] - mean(X[, 2])
-  xlim <- c(min(X[, 1]) - 500, max(X[, 1]) + 500)
-  ylim <- c(min(X[, 2]) - 500, max(X[, 2]) + 500)
-  
-  # For each camera, get "time since first deployment began"
-  camera_locs <- camera_locs %>% 
-    group_by(Date) %>% 
-    mutate(mins_since_start = as.numeric(difftime(Time, min(Time), units = "mins")) + 20)
-  
-  Dates <- unique(camera_locs$Date)
-  
-  #### Data reformatting for model ####
-  
-  # Make a matrix of observed counts
-  mtx_nrow <- max(table(camera_locs$Date))
-  ncam_vec <- numeric(3)
-  y_mtx <- matrix(ncol = 3, nrow = mtx_nrow)
-  for (i in 1:3) {
-    ncam_vec[i] <- sum(camera_locs$Date == Dates[i])
-    y_mtx[1:ncam_vec[i], i] <- camera_locs$count[camera_locs$Date == Dates[i]]
-  }
-  
-  
-  # Make a matrix of sigma_mu
-  sigma_mu_mtx <- matrix(ncol = 3, nrow = mtx_nrow)
-  for (i in 1:3) {
-    sigma_mu_mtx[1:ncam_vec[i], i] <- 
-      0.431 * log(camera_locs$mins_since_start[camera_locs$Date == Dates[i]]) + 1.002
-  }
-  
-  X_array <- array(dim = c(mtx_nrow, 3, 2))
-  for (i in 1:3) {
-    X_array[1:ncam_vec[i], i, 1] <- X$x[camera_locs$Date == Dates[i]]
-    X_array[1:ncam_vec[i], i, 2] <- X$y[camera_locs$Date == Dates[i]]
+  if (file.exists("simulations/data_template.RDS")) {
+    data_template <- readRDS("simulations/data_template.RDS") 
+  } else {
+    source("simulations/prep_sim_template_data.R") # <- this file makes the template dat.
   }
   
   #### Set true values for use in simulation ####
   
-  M <- 1000
   psi <- 0.3
   p0 <- 0.9
   log_sigma <- 4
+  
+  #### Allow for M to change ####
+  
+  data_template$constants$M <- M
+  data_template$inits$z <- rbinom(M, 1, 0.5)
+  data_template$inits$s <- array(0, dim = c(M, 3, 2))
   
   #### My nimble model ####
   
@@ -268,7 +219,7 @@ run_one_uSCR_simulation <- function(iter) {
     
     # Priors
     psi  ~ dunif(0, 1)   # Inclusion prob. for data augmentation
-    p0 ~ dunif(0, 1)     # Baseline detection
+    p0 ~ dgamma(1, 1)     # Baseline detection
     # log_sigma ~ dnorm(3.435, sd = 1.138) # From telemetry
     log_sigma ~ dnorm(4, sd = 0.1) # Tight prior on true value -- best case
     log(sigma) <- log_sigma
@@ -277,26 +228,16 @@ run_one_uSCR_simulation <- function(iter) {
   
   mod <- nimbleModel(
     code = my_uscr, 
-    constants = list(M = M,
-                     ncam = ncam_vec,
-                     X = X_array,
-                     xlim = xlim,
-                     ylim = ylim),
-    data = list(
-      y = y_mtx
-    ),
-    inits = list(
-      z = rbinom(M, 1, 0.5),
-      psi = 0.5,
-      p0 = 1,
-      log_sigma = 3.5,
-      s = array(0, dim = c(M, 3, 2))
-    )
+    constants = data_template$constants,
+    data = data_template$data,
+    inits = data_template$inits
   )
   
   cmod <- compileNimble(mod)
   
-  mcmcConf <- configureMCMC(cmod)
+  # DON'T add samplers for "s". We want custom samplers and they take
+  # forever to remove.
+  mcmcConf <- configureMCMC(cmod, nodes = c("psi", "z", "p0", "log_sigma"))
   mcmcConf$setMonitors(c("p0", "psi", "n", "log_sigma"))
   
   #### Custom samplers
@@ -306,15 +247,21 @@ run_one_uSCR_simulation <- function(iter) {
   mcmcConf$addSampler(target = c(paste("p0"),paste("log_sigma")),
                       type = 'AF_slice',control = list(adaptive=TRUE),silent = TRUE)
   
-  mcmcConf$removeSampler("s")
+  # sampler_targets <- mcmcConf$getSamplers() %>% 
+  #   lapply(function(x) x$target) %>% 
+  #   unlist()
+  
+  # mcmcConf$removeSampler(cmod$expandNodeNames("s"))
   for(i in 1:M){
-    for (t in 1:3)
+    for (t in 1:3) {
+      # mcmcConf$removeSampler(paste("s[",i,",", t, ", 1:2]", sep=""))
       mcmcConf$addSampler(target = paste("s[",i,",", t, ", 1:2]", sep=""),
                           type = 'sSampler',
                           control=list(i = i, t = t,
-                                       xlim = xlim,
-                                       ylim = ylim,
+                                       xlim = data_template$constants$xlim,
+                                       ylim = data_template$constants$ylim,
                                        scale = 0.25), silent = TRUE)
+    }
   }
   
   
@@ -325,7 +272,7 @@ run_one_uSCR_simulation <- function(iter) {
   res_list <- list()
   
   cmod$p0 <- p0
-  cmod$psi  <- psi
+  cmod$psi <- psi
   
   cmod$simulate("z")
   cmod$simulate("s")
@@ -337,6 +284,9 @@ run_one_uSCR_simulation <- function(iter) {
   cmod$calculate("lam_sum")
   cmod$simulate("y", includeData = T)
   cmod$setData("y")
+  
+  mod$y <- cmod$y
+  mod$setData("y")
   
   samples <- runMCMC(cmcmc, niter = 50000, nburnin = 20000, nchains = 3,
                      thin = 5, samplesAsCodaMCMC = TRUE)
