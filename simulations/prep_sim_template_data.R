@@ -32,8 +32,8 @@ camera_pts <- vect(camera_locs, geom = c("Longitude", "Latitude"),
 X <- camera_pts[, c("x", "y")]
 X[, 1] <- X[, 1] - mean(X[, 1])
 X[, 2] <- X[, 2] - mean(X[, 2])
-xlim <- c(min(X[, 1]) - 500, max(X[, 1]) + 500)
-ylim <- c(min(X[, 2]) - 500, max(X[, 2]) + 500)
+xlim <- c(min(X[, 1]) - 100, max(X[, 1]) + 100)
+ylim <- c(min(X[, 2]) - 100, max(X[, 2]) + 100)
 
 # For each camera, get "time since first deployment began"
 camera_locs <- camera_locs %>% 

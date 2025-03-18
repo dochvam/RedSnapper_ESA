@@ -162,7 +162,7 @@ GetDetectionRate <- nimbleFunction(
   }
 )
 
-run_one_uSCR_simulation <- function(iter, M = 5000) {
+run_one_uSCR_simulation <- function(iter, M = 1000) {
   set.seed(542389 + iter * 41)
   
   #### Load a premade template based on real data ####
@@ -177,7 +177,7 @@ run_one_uSCR_simulation <- function(iter, M = 5000) {
   
   psi <- 0.3
   p0 <- 0.9
-  log_sigma <- 4
+  log_sigma <- 5
   
   #### Allow for M to change ####
   
@@ -221,7 +221,7 @@ run_one_uSCR_simulation <- function(iter, M = 5000) {
     psi  ~ dunif(0, 1)   # Inclusion prob. for data augmentation
     p0 ~ dgamma(1, 1)     # Baseline detection
     # log_sigma ~ dnorm(3.435, sd = 1.138) # From telemetry
-    log_sigma ~ dnorm(4, sd = 0.1) # Tight prior on true value -- best case
+    log_sigma ~ dnorm(5, sd = 0.1) # Tight prior on true value -- best case
     log(sigma) <- log_sigma
   })
   
@@ -278,7 +278,8 @@ run_one_uSCR_simulation <- function(iter, M = 5000) {
   cmod$simulate("s")
   true_N <- sum(cmod$z)
   
-  cmod$simulate("log_sigma")
+  cmod$log_sigma <- log_sigma
+    
   cmod$calculate("sigma")
   cmod$calculate("lam")
   cmod$calculate("lam_sum")
@@ -288,7 +289,8 @@ run_one_uSCR_simulation <- function(iter, M = 5000) {
   mod$y <- cmod$y
   mod$setData("y")
   
-  samples <- runMCMC(cmcmc, niter = 50000, nburnin = 20000, nchains = 3,
+  # 500 iterations w/ M=5000 takes ~15 minutes
+  samples <- runMCMC(cmcmc, niter = 50000, nburnin = 20000, nchains = 2,
                      thin = 5, samplesAsCodaMCMC = TRUE)
   
   summary <- MCMCvis::MCMCsummary(samples)
