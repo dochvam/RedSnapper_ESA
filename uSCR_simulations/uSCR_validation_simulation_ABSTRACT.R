@@ -13,12 +13,12 @@ set.seed(89412)
 #'  > Ignoring time-staggered deployment starts
 #'  > Real camera locations
 ##########################################################
-source("simulations/SCR_sim_fn.R")
+source("uSCR_simulations/SCR_sim_fn.R")
 
 #### Parallel execution ####
 library(parallel)
 cl <- makeCluster(10)
-captured <- clusterEvalQ(cl, source("simulations/SCR_sim_fn.R"))
+captured <- clusterEvalQ(cl, source("uSCR_simulations/SCR_sim_fn.R"))
 
 specs_df <- expand.grid(
   M = c(250, 500), psi = 0.2, log_sigma = log(c(0.1, 0.5, 1, 2.5)),

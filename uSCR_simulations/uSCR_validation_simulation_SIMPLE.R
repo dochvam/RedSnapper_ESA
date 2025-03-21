@@ -11,12 +11,12 @@ library(nimble)
 #'  > Ignoring time-staggered deployment starts
 #'  > Real camera locations
 ##########################################################
-source("simulations/SCR_sim_fn.R")
+source("uSCR_simulations/SCR_sim_fn.R")
 
 #### Parallel execution ####
 library(parallel)
 cl <- makeCluster(8)
-captured <- clusterEvalQ(cl, source("simulations/SCR_sim_fn.R"))
+captured <- clusterEvalQ(cl, source("uSCR_simulations/SCR_sim_fn.R"))
 
 result <- parLapply(cl = cl, X = 8 + 1:8, fun = run_one_uSCR_simulation,
                     M = 5000)

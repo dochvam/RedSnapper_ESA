@@ -304,10 +304,10 @@ run_one_uSCR_simulation <- function(iter, M = 1000) {
   
   #### Load a premade template based on real data ####
   
-  if (file.exists("simulations/data_template.RDS")) {
-    data_template <- readRDS("simulations/data_template.RDS") 
+  if (file.exists("uSCR_simulations/data_template.RDS")) {
+    data_template <- readRDS("uSCR_simulations/data_template.RDS") 
   } else {
-    source("simulations/prep_sim_template_data.R") # <- this file makes the template dat.
+    source("uSCR_simulations/prep_sim_template_data.R") # <- this file makes the template dat.
   }
   
   #### Set true values for use in simulation ####

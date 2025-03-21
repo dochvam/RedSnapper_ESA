@@ -8,12 +8,8 @@ chicken_rock_long <- -76.14321
 chicken_rock_lat <- 34.62355
 
 
-
-
 VPS_folder <- "Data/SnapperMvmtAbundanceStudy/VPS_Data/VPS-ChickenRock-01-Results-20240202/results/animal/"
 VPS_files <- list.files(VPS_folder)
-
-ROV_pts_reported <- 
 
 ROV_files <- VPS_files[grepl("^8", VPS_files)]
 

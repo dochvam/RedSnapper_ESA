@@ -80,4 +80,4 @@ data_template <- list(
   )
 )
 
-saveRDS(data_template, "simulations/data_template.RDS")
+saveRDS(data_template, "uSCR_simulations/data_template.RDS")
