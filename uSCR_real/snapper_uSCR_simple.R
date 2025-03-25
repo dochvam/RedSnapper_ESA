@@ -1,3 +1,8 @@
+library(nimbleEcology)
+library(tidyverse)
+library(readxl)
+library(terra)
+
 
 #### nimbleFunction GetDetectionRate ####
 GetDetectionRate <- nimbleFunction(
@@ -160,14 +165,14 @@ mcmcConf <- configureMCMC(cmod, nodes = c("z", "s"))
 mcmcConf$addSampler(target = c("lam0", "psi", "log_sigma"),
                     type = 'AF_slice', control = list(adaptive=TRUE), silent = TRUE)
 
-mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma"))
+mcmcConf$setMonitors(c("lam0", "psi", "n", "s", "log_sigma", "sigma"))
 
 
 mcmc <- buildMCMC(mcmcConf)
 cmcmc <- compileNimble(mcmc)
 
 
-samples <- runMCMC(cmcmc, niter = 30000, nburnin = 5000, nchains = 8,
+samples <- runMCMC(cmcmc, niter = 30000, nburnin = 5000, nchains = 5,
                    thin = 2, samplesAsCodaMCMC = TRUE, 
                    inits = data_template$inits)
 # samples <- runMCMC(cmcmc, niter = 2000, nburnin = 0, nchains = 1,
