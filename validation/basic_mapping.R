@@ -283,3 +283,18 @@ hbmap_wvps <- ggplot() +
 
 hb_all <- arrangeGrob(hbmap, hbmap_wvps, nrow = 2)
 ggsave("plots/hardbottom_map.jpg", hb_all, width = 6, height = 6)
+
+
+camera_pts <- camera_counts %>% 
+  # filter(date == as_date("2023-08-22")) %>% 
+  vect(, geom = c("Longitude", "Latitude"),
+       crs = "+proj=longlat")
+
+hbmap_wcams <- ggplot() +
+  geom_spatraster(data = hardbottom) +
+  geom_spatvector(data = camera_pts, col = "red", size = 1) +
+  theme_minimal() +
+  scale_fill_viridis_d() + 
+  ggtitle("Hardbottom map (w camera locs)")
+ggsave("plots/hardbottom_map_wcam.jpg", hbmap_wcams, width = 6, height = 3)
+

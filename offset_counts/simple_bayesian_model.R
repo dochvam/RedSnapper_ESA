@@ -343,3 +343,23 @@ lim <- range(log(c(cam_var_samples,  var(y_cam))))
   abline(v = log(var(y_cam)), col = "red")
 }
 
+#### Make a plot of everything ####
+all_res <- bind_rows(lapply(list.files("offset_counts/", pattern = "results.csv",
+                                       full.names = TRUE),
+                            read_csv))
+
+
+(all_res %>% 
+  left_join(data.frame(
+    param = paste0("theta[", 1:3, "]"),
+    dir = c("Towards", "Away", "Perpendicular")
+  )) %>% 
+  filter(!is.na(dir)) %>% 
+  ggplot() +
+  geom_pointrange(aes(dir, mean, ymin = `2.5%`, ymax = `97.5%`,
+                      col = distr), position = position_dodge(width = 0.2)) +
+  ylab("Effective sampling area (m^2) - plotted on log scale") + xlab("Current dir.") +
+  scale_y_continuous(trans = "log", breaks = c(100, 400, 1600, 6400)) +
+  coord_flip() +
+  theme_minimal()) %>% 
+ggsave(filename = "plots/simple_model_ESA.jpg", width = 5, height = 3.5)

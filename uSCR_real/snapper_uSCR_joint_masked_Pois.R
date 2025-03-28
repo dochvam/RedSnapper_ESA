@@ -257,8 +257,6 @@ data_template <- list(
   inits = list(
     z = matrix(ncol = 3, rbinom(M*3, 1, 0.1)),
     psi = 0.1,
-    phi_CT = 0.1,
-    phi_ROV = 0.1,
     lam0 = rep(0.1, 3),
     log_sigma = 3,
     s = initialize_s(M = M, habitatMask = hb_mtx, 
@@ -273,8 +271,7 @@ data_template <- list(
 my_uscr <- nimbleCode({
   
   for (i in 1:nROV) {
-    ROV_obs[i] ~ dnegbin(size = 1/phi_ROV, 
-                         prob = 1 / (1 + phi_ROV * density * ROV_hb_area[i]))
+    ROV_obs[i] ~ dpois(density * ROV_hb_area[i])
   }
   
   # Loop over all potential individuals
@@ -307,8 +304,7 @@ my_uscr <- nimbleCode({
   for (t in 1:3) {
     for (j in 1:ncam[t]) {
       lambda_sum[j, t] <- sum(lambda[1:M, j, t] * nframes[j, t])
-      y[j, t] ~ dnegbin(size = 1/phi_CT, prob = 1/(1 + phi_CT * lambda_sum[j, t]))
-      # y[j, t] ~ dpois(lambda_sum[j, t])
+      y[j, t] ~ dpois(lambda_sum[j, t])
     }
     
     n[t] <- sum(z[1:M, t])
@@ -320,8 +316,6 @@ my_uscr <- nimbleCode({
   for (i in 1:3) {
     lam0[i] ~ dgamma(0.1, 1)  # Detection rate per frame at centroid, depends on current dir.
   }
-  phi_ROV ~ dgamma(0.05, 1)
-  phi_CT  ~ dgamma(0.05, 1)
   density <- psi * M / hb_area
   
   log_sigma ~ dnorm(3.435, sd = 1.138) # From telemetry
@@ -339,15 +333,14 @@ mod <- nimbleModel(
 cmod <- compileNimble(mod)
 
 # We want custom samplers for everything except z, s
-mcmcConf <- configureMCMC(cmod, nodes = c("z", "s", "phi_ROV", "phi_CT"))
+mcmcConf <- configureMCMC(cmod, nodes = c("z", "s"))
 
 #### Custom samplers
 #use block update for lam0, psi, and var bc correlated posteriors.
 mcmcConf$addSampler(target = c("lam0", "psi", "log_sigma"),
                     type = 'AF_slice', control = list(adaptive=TRUE), silent = TRUE)
 
-mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma", "density",
-                       "phi_CT", "phi_ROV"))
+mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma", "density"))
 
 
 mcmc <- buildMCMC(mcmcConf)
@@ -355,7 +348,7 @@ cmcmc <- compileNimble(mcmc)
 
 
 # samples <- runMCMC(cmcmc, niter = 1000, nburnin = 0, nchains = 2,
-samples <- runMCMC(cmcmc, niter = 30000, nburnin = 5000, nchains = 5,
+samples <- runMCMC(cmcmc, niter = 20000, nburnin = 5000, nchains = 2,
                    thin = 5, samplesAsCodaMCMC = TRUE, 
                    inits = data_template$inits)
 # samples <- runMCMC(cmcmc, niter = 2000, nburnin = 0, nchains = 1,
@@ -368,7 +361,7 @@ rownames(summary) <- NULL
 
 saveRDS(list(summary = summary,
              samples = samples),
-        paste0("uSCR_real/joint_masked_posterior.RDS"))
+        paste0("uSCR_real/joint_masked_posterior_Pois.RDS"))
 
 
 
