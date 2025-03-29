@@ -32,11 +32,15 @@ camera_counts <- camera_dat %>%
   group_by(Station_ID, date) %>% 
   summarize(count = sum(total), nframes = n())
 
+camera_locations_corrected <- read_csv("intermediate/corrected_camera_stations.csv") %>% 
+  select(Station_ID, Date, Longitude, Latitude)
+
 camera_locs <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx", sheet = "StationData") %>% 
-  filter(`Camera (A or C)` == "A") %>% 
-  dplyr::select(Station_ID, Date, Time = Start_Time_GMT,
-                Latitude = Start_Latitude, Longitude = Start_Longitude) %>% 
-  left_join(camera_counts, by = c("Station_ID", "Date" = "date"))
+  filter(`Camera (A or C)` == "A") %>%
+  dplyr::select(Station_ID, Date, Time = Start_Time_GMT, 
+                current_dir = `Current Direction`) %>% 
+  left_join(camera_counts, by = c("Station_ID", "Date" = "date")) %>% 
+  left_join(camera_locations_corrected, by = c("Station_ID", "Date"))
 
 
 camera_locs$Longitude <- as.numeric(camera_locs$Longitude)

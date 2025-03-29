@@ -28,10 +28,15 @@ camera_dat <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS
   mutate(time = as.numeric(difftime(time, as_datetime("1899-12-31 00:00:00"), units = "sec"))) %>% 
   filter(camera == "A", time > 60 * 10 & time <= 60 * 30) # Filter out descent/retrieval frames
 
+
+camera_locations_corrected <- read_csv("intermediate/corrected_camera_stations.csv") %>% 
+  select(Station_ID, Date, Longitude, Latitude)
+
 stations <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx", sheet = "StationData") %>% 
   mutate(Start_Time_GMT = as.numeric(difftime(Start_Time_GMT, as_datetime("1899-12-31 00:00:00"), units = "hours"))) %>% 
   filter(`Camera (A or C)` == "A") %>% 
-  mutate(Start_Longitude = as.numeric(Start_Longitude))
+  select(-Start_Longitude, -Start_Latitude) %>% 
+  left_join(camera_locations_corrected)
 
 #### Load the ROV data ####
 
@@ -77,7 +82,7 @@ dethists <- camera_dat %>%
   ungroup() %>% 
   pivot_wider(values_from = total, names_from = frame) %>% 
   left_join(distinct(stations, date = Date, Station_ID, 
-                     Latitude = Start_Latitude, Longitude = Start_Longitude,
+                     Latitude, Longitude,
                      current_dir = `Current Direction`), by = c("date", "Station_ID"))
 
 dethist_mtx <- as.matrix(dethists[, grep("^F", colnames(dethists))])
@@ -92,7 +97,7 @@ current_dir <- ifelse(
 #### Get distance to HB ####
 
 hardbottom <- rast("Data/Chicken_Rock_Map/ChickenRock_Classification.tif")
-values(hardbottom) <- as.numeric(values(hardbottom) == 4)
+terra::values(hardbottom) <- as.numeric(terra::values(hardbottom) == 4)
 
 
 rov_pts <- vect(rov_dat, geom = c("Longitude", "Latitude"),

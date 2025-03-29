@@ -4,13 +4,14 @@ library(nimble)
 
 result_file <- "uSCR_real/joint_masked_posterior_NB.RDS"
 distr <- "NB"
+prefix_out <- "joint_masked_uSCR"
 
 temp <- readRDS(result_file)
 
 
 samples_mtx <- as.matrix(temp$samples)
 
-resoln <- 10
+resoln <- 5
 max_m <- 500
 cell_area <- resoln^2
 grid <- expand.grid(x = seq(-max_m, max_m, by = resoln),
@@ -50,7 +51,12 @@ for (i in 1:nrow(samples_mtx)) {
 
 ESA_df <- data.frame(
   current_dir = c("Towards", "Away", "Perpendicular"),
+  distr = distr,
+  prefix = prefix_out,
   ESA_q50 = apply(esa_posterior, 2, median),
   ESA_q025 = apply(esa_posterior, 2, quantile, prob = 0.025),
   ESA_q975 = apply(esa_posterior, 2, quantile, prob = 0.975)
 )
+
+write_csv(ESA_df, paste0("ESA_estimates/", prefix_out, "_", distr, "_ESA.csv"))
+
