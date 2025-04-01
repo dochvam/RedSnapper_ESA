@@ -200,17 +200,16 @@ rownames(summary) <- NULL
 
 write_csv(summary, "offset_counts/Pois_model_results.csv")
 
+
 summary %>% 
   left_join(data.frame(
     param = paste0("theta[", 1:3, "]"),
     dir = c("Towards", "Away", "Perpendicular")
   )) %>% 
   filter(!is.na(dir)) %>% 
-  ggplot() +
-  geom_pointrange(aes(dir, mean, ymin = `2.5%`, ymax = `97.5%`)) +
-  ylab("Effective sampling area") + xlab("Current dir.") +
-  coord_flip() +
-  theme_minimal()
+  mutate(distr = "Pois", prefix = "Count_GLM") %>% 
+  select(dir, distr, prefix, ESA_q50 = `50%`, ESA_q025 = `2.5%`, ESA_q975 = `97.5%`) %>% 
+  write_csv("ESA_estimates/Pois_GLM_ESA.csv")
 
 #### PPC: are the data overdispersed for a Poisson? #### 
 cam_var_samples <- as.numeric(unlist(samples[, "cam_var"]))
@@ -262,19 +261,16 @@ rownames(summaryNB) <- NULL
 
 write_csv(summaryNB, "offset_counts/NB_model_results.csv")
 
-bind_rows(summary, summaryNB) %>% 
+summaryNB %>% 
   left_join(data.frame(
     param = paste0("theta[", 1:3, "]"),
     dir = c("Towards", "Away", "Perpendicular")
   )) %>% 
   filter(!is.na(dir)) %>% 
-  ggplot() +
-  geom_pointrange(aes(dir, mean, ymin = `2.5%`, ymax = `97.5%`,
-                      col = distr), position = position_dodge(width = 0.1)) +
-  ylab("Effective sampling area") + xlab("Current dir.") +
-  coord_flip() +
-  theme_minimal()
-
+  mutate(distr = "NB", prefix = "Count_GLM") %>% 
+  select(dir, distr, prefix, ESA_q50 = `50%`, ESA_q025 = `2.5%`, ESA_q975 = `97.5%`) %>% 
+  write_csv("ESA_estimates/NB_GLM_ESA.csv")
+  
 #### PPC: are the data overdispersed for a NB? #### 
 cam_var_samples <- as.numeric(unlist(samplesNB[, "cam_var"]))
 mean(var(y_cam) > cam_var_samples)
@@ -325,6 +321,17 @@ rownames(summaryZIP) <- NULL
 
 write_csv(summaryZIP, "offset_counts/ZIP_model_results.csv")
 
+
+summaryZIP %>% 
+  left_join(data.frame(
+    param = paste0("theta[", 1:3, "]"),
+    dir = c("Towards", "Away", "Perpendicular")
+  )) %>% 
+  filter(!is.na(dir)) %>% 
+  mutate(distr = "ZIP", prefix = "Count_GLM") %>% 
+  select(dir, distr, prefix, ESA_q50 = `50%`, ESA_q025 = `2.5%`, ESA_q975 = `97.5%`) %>% 
+  write_csv("ESA_estimates/ZIP_GLM_ESA.csv")
+
 bind_rows(summary, summaryZIP) %>% 
   left_join(data.frame(
     param = paste0("theta[", 1:3, "]"),
@@ -348,23 +355,23 @@ lim <- range(log(c(cam_var_samples,  var(y_cam))))
   abline(v = log(var(y_cam)), col = "red")
 }
 
-#### Make a plot of everything ####
-all_res <- bind_rows(lapply(list.files("offset_counts/", pattern = "results.csv",
-                                       full.names = TRUE),
-                            read_csv))
-
-
-(all_res %>% 
-  left_join(data.frame(
-    param = paste0("theta[", 1:3, "]"),
-    dir = c("Towards", "Away", "Perpendicular")
-  )) %>% 
-  filter(!is.na(dir)) %>% 
-  ggplot() +
-  geom_pointrange(aes(dir, mean, ymin = `2.5%`, ymax = `97.5%`,
-                      col = distr), position = position_dodge(width = 0.2)) +
-  ylab("Effective sampling area (m^2) - plotted on log scale") + xlab("Current dir.") +
-  scale_y_continuous(trans = "log", breaks = c(100, 400, 1600, 6400)) +
-  coord_flip() +
-  theme_minimal()) %>% 
-ggsave(filename = "plots/simple_model_ESA.jpg", width = 5, height = 3.5)
+# #### Make a plot of everything ####
+# all_res <- bind_rows(lapply(list.files("offset_counts/", pattern = "results.csv",
+#                                        full.names = TRUE),
+#                             read_csv))
+# 
+# 
+# (all_res %>% 
+#   left_join(data.frame(
+#     param = paste0("theta[", 1:3, "]"),
+#     dir = c("Towards", "Away", "Perpendicular")
+#   )) %>% 
+#   filter(!is.na(dir)) %>% 
+#   ggplot() +
+#   geom_pointrange(aes(dir, mean, ymin = `2.5%`, ymax = `97.5%`,
+#                       col = distr), position = position_dodge(width = 0.2)) +
+#   ylab("Effective sampling area (m^2) - plotted on log scale") + xlab("Current dir.") +
+#   scale_y_continuous(trans = "log", breaks = c(100, 400, 1600, 6400)) +
+#   coord_flip() +
+#   theme_minimal()) %>% 
+# ggsave(filename = "plots/simple_model_ESA.jpg", width = 5, height = 3.5)

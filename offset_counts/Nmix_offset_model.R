@@ -180,7 +180,7 @@ summary$param <- rownames(summary)
 summary$distr <- "Nmix_Poi"
 rownames(summary) <- NULL
 
-write_csv(summary, "offset_counts/Pois_Nmix_offset_results.csv")
+write_csv(summary, "ESA_estimates/Pois_Nmix_offset_results.csv")
 
 summary %>% 
   left_join(data.frame(
@@ -188,11 +188,9 @@ summary %>%
     dir = c("Towards", "Away", "Perpendicular")
   )) %>% 
   filter(!is.na(dir)) %>% 
-  ggplot() +
-  geom_pointrange(aes(dir, mean, ymin = `2.5%`, ymax = `97.5%`)) +
-  ylab("Effective sampling area") + xlab("Current dir.") +
-  coord_flip() +
-  theme_minimal()
+  mutate(distr = "BP", prefix = "Count_Nmix") %>% 
+  select(dir, distr, prefix, ESA_q50 = `50%`, ESA_q025 = `2.5%`, ESA_q975 = `97.5%`) %>% 
+  write_csv("ESA_estimates/BP_Nmix_ESA.csv")
 
 
 #### Repeat with a BBP N-mixture ####
@@ -260,26 +258,37 @@ summary$param <- rownames(summary)
 summary$distr <- "Nmix_BBP"
 rownames(summary) <- NULL
 
-write_csv(summary, "offset_counts/BBP_Nmix_offset_results.csv")
+write_csv(summary, "ESA_estimates/BBP_Nmix_offset_results.csv")
 
-bind_rows(
-    read_csv("offset_counts/BBP_Nmix_offset_results.csv"),
-    read_csv("offset_counts/Pois_model_results.csv"),
-    read_csv("offset_counts/ZIP_model_results.csv"),
-    read_csv("offset_counts/NB_model_results.csv"),
-    read_csv("offset_counts/Pois_Nmix_offset_results.csv")
-  ) %>% 
+
+summary %>% 
   left_join(data.frame(
     param = paste0("theta[", 1:3, "]"),
     dir = c("Towards", "Away", "Perpendicular")
   )) %>% 
   filter(!is.na(dir)) %>% 
-  ggplot() +
-  geom_pointrange(aes(dir, mean, col = distr, ymin = `2.5%`, ymax = `97.5%`),
-                  position = position_dodge(width = 0.2)) +
-  ylab("Effective sampling area") + xlab("Current dir.") +
-  coord_flip() +
-  theme_minimal()
+  mutate(distr = "BBP", prefix = "Count_Nmix") %>% 
+  select(dir, distr, prefix, ESA_q50 = `50%`, ESA_q025 = `2.5%`, ESA_q975 = `97.5%`) %>% 
+  write_csv("ESA_estimates/BBP_Nmix_ESA.csv")
+
+# bind_rows(
+#     read_csv("offset_counts/BBP_Nmix_offset_results.csv"),
+#     read_csv("offset_counts/Pois_model_results.csv"),
+#     read_csv("offset_counts/ZIP_model_results.csv"),
+#     read_csv("offset_counts/NB_model_results.csv"),
+#     read_csv("offset_counts/Pois_Nmix_offset_results.csv")
+#   ) %>% 
+#   left_join(data.frame(
+#     param = paste0("theta[", 1:3, "]"),
+#     dir = c("Towards", "Away", "Perpendicular")
+#   )) %>% 
+#   filter(!is.na(dir)) %>% 
+#   ggplot() +
+#   geom_pointrange(aes(dir, mean, col = distr, ymin = `2.5%`, ymax = `97.5%`),
+#                   position = position_dodge(width = 0.2)) +
+#   ylab("Effective sampling area") + xlab("Current dir.") +
+#   coord_flip() +
+#   theme_minimal()
 
 
 
