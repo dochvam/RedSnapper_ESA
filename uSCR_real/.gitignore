@@ -4,3 +4,5 @@ joint_masked_posterior.RDS
 joint_masked_posterior_NB.RDS
 joint_masked_posterior_Pois.RDS
 joint_masked_VPSsurface_Pois.RDS
+joint_masked_VPSasCovar_Pois.RDS
+joint_masked_VPSsurface_NB.RDS
