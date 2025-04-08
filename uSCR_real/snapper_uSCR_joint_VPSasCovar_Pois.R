@@ -20,14 +20,15 @@ GetDetectionRate <- nimbleFunction(
 )
 
 
-dHabDistr <- nimbleFunction(run = function(x = double(1),
-                                           xmax = double(0),
-                                           xmin = double(0),
-                                           ymax = double(0),
-                                           ymin = double(0),
-                                           resoln = double(0),
-                                           habitatMask = double(2),
-                                           log = logical(0)) {
+dHabDistr_asCovar <- nimbleFunction(run = function(x = double(1),
+                                                   xmax = double(0),
+                                                   xmin = double(0),
+                                                   ymax = double(0),
+                                                   ymin = double(0),
+                                                   resoln = double(0),
+                                                   habitatMask = double(2),
+                                                   beta = double(0),
+                                                   log = logical(0)) {
   if (x[1] < xmin) return(-Inf)
   if (x[1] > xmax) return(-Inf)
   if (x[2] < ymin) return(-Inf)
@@ -37,30 +38,37 @@ dHabDistr <- nimbleFunction(run = function(x = double(1),
   row <- trunc((x[1] - xmin) / resoln) + 1
   col <- trunc((x[2] - ymin) / resoln) + 1
   
-  if (log) return(log(habitatMask[row, col]))
-  else return(habitatMask[row, col])
+  phi <- exp(beta * habitatMask) # hm is log-scale covariate
+
+  if (log) return(log(phi[row, col] / sum(phi)))
+  else return(phi[row, col] / sum(phi))
   returnType(double(0))
 }, buildDerivs = FALSE)
+# ctest <- compileNimble(dHabDistr_asCovar)
 
-rHabDistr <- nimbleFunction(run = function(n = double(0),
+rHabDistr_asCovar <- nimbleFunction(run = function(n = double(0),
                                            xmax = double(0),
                                            xmin = double(0),
                                            ymax = double(0),
                                            ymin = double(0),
                                            resoln = double(0),
-                                           habitatMask = double(2)
+                                           habitatMask = double(2),
+                                           beta = double(0)
 ){
   returnType(double(1))
   
+  phi <- exp(beta * log(habitatMask)) # log(hm) is covariate
+  prob_mtx <- phi / sum(phi)
+    
   # Randomly select a row based on their relative weights
-  rowProbs <- numeric(dim(habitatMask)[1])
-  for (i in 1:(dim(habitatMask)[1])) {
-    rowProbs[i] <- sum(habitatMask[i, ])
+  rowProbs <- numeric(dim(prob_mtx)[1])
+  for (i in 1:(dim(prob_mtx)[1])) {
+    rowProbs[i] <- sum(prob_mtx[i, ])
   }
   row <- rcat(1, prob = rowProbs)
   
   # Randomly select a column from that row
-  col <- rcat(1, prob = habitatMask[row, ])
+  col <- rcat(1, prob = prob_mtx[row, ])
   
   # # Generate a random coord. uniformly within that cell
   x <- c(
@@ -68,9 +76,8 @@ rHabDistr <- nimbleFunction(run = function(n = double(0),
     ymin + resoln * (col - 1) + runif(1, 0, resoln)
   )
   return(x)
-  
 }, buildDerivs = FALSE)
-# ctest <- compileNimble(rHabDistr)
+# ctest <- compileNimble(rHabDistr_asCovar)
 
 initialize_s <- function(n, t,
                          xmax,
@@ -82,9 +89,9 @@ initialize_s <- function(n, t,
   s <- array(NA, dim =c(n, 3, 2))
   for (i in 1:n) {
     for (ti in 1:t) {
-      s[i, ti, ] <- rHabDistr(1, xmax = xmax, xmin = xmin,
+      s[i, ti, ] <- rHabDistr_asCovar(1, xmax = xmax, xmin = xmin,
                           ymax = ymax, ymin = ymin, resoln = resoln,
-                          habitatMask = habitatMask)
+                          habitatMask = habitatMask, beta=1)
       
     }
   }
@@ -289,6 +296,7 @@ data_template <- list(
     psi = 0.1,
     lam0 = rep(0.1, 3),
     log_sigma = 3,
+    spatial_beta = 1,
     s = initialize_s(n = M, t = 3,
                      xmin = grid_bbox[1],
                      xmax = grid_bbox[2],
@@ -315,13 +323,14 @@ my_uscr <- nimbleCode({
       z[i, t] ~ dbern(psi)
       
       # Distribution of centroids
-      s[i, t, 1:2] ~ dHabDistr(
+      s[i, t, 1:2] ~ dHabDistr_asCovar(
         xmax = xmax,
         xmin = xmin,
         ymax = ymax,
         ymin = ymin,
         resoln = resoln,
-        habitatMask = hm[1:hm_nrow, 1:hm_ncol]
+        habitatMask = hm[1:hm_nrow, 1:hm_ncol],
+        beta = spatial_beta
       )
 
       # Calculate distances
@@ -350,6 +359,7 @@ my_uscr <- nimbleCode({
   for (i in 1:3) {
     lam0[i] ~ dgamma(0.1, 1)  # Detection rate per frame at centroid, depends on current dir.
   }
+  spatial_beta ~ dnorm(1, sd = 2)
 
   log_sigma ~ dnorm(3.435, sd = 1.138) # From telemetry
   log(sigma) <- log_sigma
@@ -366,14 +376,14 @@ mod <- nimbleModel(
 cmod <- compileNimble(mod)
 
 # We want custom samplers for everything except z, s
-mcmcConf <- configureMCMC(cmod, nodes = c("z", "s"))
+mcmcConf <- configureMCMC(cmod, nodes = c("z", "s", "spatial_beta"))
 
 #### Custom samplers
 #use block update for lam0, psi, and var bc correlated posteriors.
 mcmcConf$addSampler(target = c("lam0", "psi", "log_sigma"),
                     type = 'AF_slice', control = list(adaptive=TRUE), silent = TRUE)
 
-mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma"))
+mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma", "spatial_beta"))
 
 
 mcmc <- buildMCMC(mcmcConf)
@@ -381,7 +391,7 @@ cmcmc <- compileNimble(mcmc)
 
 
 # samples <- runMCMC(cmcmc, niter = 1000, nburnin = 0, nchains = 2,
-samples <- runMCMC(cmcmc, niter = 20000, nburnin = 5000, nchains = 2,
+samples <- runMCMC(cmcmc, niter = 20000, nburnin = 5000, nchains = 3,
                    thin = 5, samplesAsCodaMCMC = TRUE, 
                    inits = data_template$inits)
 # samples <- runMCMC(cmcmc, niter = 2000, nburnin = 0, nchains = 1,
@@ -394,7 +404,7 @@ rownames(summary) <- NULL
 
 saveRDS(list(summary = summary,
              samples = samples),
-        paste0("uSCR_real/joint_masked_VPSsurface_Pois.RDS"))
+        paste0("uSCR_real/joint_masked_VPSasCovar_Pois.RDS"))
 
 
 

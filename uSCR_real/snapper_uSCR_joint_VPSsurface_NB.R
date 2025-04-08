@@ -180,7 +180,7 @@ rov_dat <- bind_rows(
   filter(structured_area > 0)
 
 #### Format the camera data ####
-M <- 1000
+M <- 5000
 
 # Get the real camera locations and deployment times for use in the simulation
 
@@ -338,7 +338,7 @@ my_uscr <- nimbleCode({
   for (t in 1:3) {
     for (j in 1:ncam[t]) {
       lambda_sum[j, t] <- sum(lambda[1:M, j, t] * nframes[j, t])
-      y[j, t] ~ dpois(lambda_sum[j, t])
+      y[j, t] ~ dnegbin(size = 1/phi_CT, prob = 1/(1 + phi_CT * lambda_sum[j, t]))
     }
     
     n[t] <- sum(z[1:M, t])
@@ -350,7 +350,8 @@ my_uscr <- nimbleCode({
   for (i in 1:3) {
     lam0[i] ~ dgamma(0.1, 1)  # Detection rate per frame at centroid, depends on current dir.
   }
-
+  phi_CT  ~ dgamma(0.05, 1)
+  
   log_sigma ~ dnorm(3.435, sd = 1.138) # From telemetry
   log(sigma) <- log_sigma
 })
@@ -366,14 +367,14 @@ mod <- nimbleModel(
 cmod <- compileNimble(mod)
 
 # We want custom samplers for everything except z, s
-mcmcConf <- configureMCMC(cmod, nodes = c("z", "s"))
+mcmcConf <- configureMCMC(cmod, nodes = c("z", "s", "phi_CT"))
 
 #### Custom samplers
 #use block update for lam0, psi, and var bc correlated posteriors.
 mcmcConf$addSampler(target = c("lam0", "psi", "log_sigma"),
                     type = 'AF_slice', control = list(adaptive=TRUE), silent = TRUE)
 
-mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma"))
+mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma", "phi_CT"))
 
 
 mcmc <- buildMCMC(mcmcConf)
@@ -381,8 +382,8 @@ cmcmc <- compileNimble(mcmc)
 
 
 # samples <- runMCMC(cmcmc, niter = 1000, nburnin = 0, nchains = 2,
-samples <- runMCMC(cmcmc, niter = 20000, nburnin = 5000, nchains = 2,
-                   thin = 5, samplesAsCodaMCMC = TRUE, 
+samples <- runMCMC(cmcmc, niter = 50000, nburnin = 10000, nchains = 2,
+                   thin = 2, samplesAsCodaMCMC = TRUE, 
                    inits = data_template$inits)
 # samples <- runMCMC(cmcmc, niter = 2000, nburnin = 0, nchains = 1,
 #                    thin = 1, samplesAsCodaMCMC = TRUE)
@@ -394,7 +395,7 @@ rownames(summary) <- NULL
 
 saveRDS(list(summary = summary,
              samples = samples),
-        paste0("uSCR_real/joint_masked_VPSsurface_Pois.RDS"))
+        paste0("uSCR_real/joint_masked_VPSsurface_NB.RDS"))
 
 
 

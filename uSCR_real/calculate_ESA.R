@@ -58,9 +58,21 @@ calc_ESA <- function(result_file, distr, prefix_out) {
   write_csv(ESA_df, paste0("ESA_estimates/", prefix_out, "_", distr, "_ESA.csv"))
 }
 
-result_file <- "uSCR_real/joint_masked_posterior_NB.RDS"
-distr <- "NB"
-prefix_out <- "joint_masked_uSCR"
+calc_95UA <- function(result_file, distr, prefix_out) {
+  temp <- readRDS(result_file)
+  
+  sigma_samples <- as.numeric(unlist(temp$samples[, "sigma"]))
+  
+  ua_samples <- base::pi * (sigma_samples * 2.447)^2
+  
+  ua_df <- data.frame(type = "95% UA", distr = distr, prefix = prefix_out,
+                      UA_q50  = median(ua_samples),
+                      UA_q025 = quantile(ua_samples, prob = 0.025),
+                      UA_q975 = quantile(ua_samples, prob = 0.975)
+  )
+  
+  ua_df
+}
 
 
 calc_ESA(result_file = "uSCR_real/joint_masked_posterior_Pois.RDS",
@@ -71,3 +83,30 @@ calc_ESA(result_file = "uSCR_real/joint_masked_posterior_NB.RDS",
 
 calc_ESA(result_file = "uSCR_real/joint_masked_VPSsurface_Pois.RDS",
          distr = "Pois", prefix_out = "joint_VPSsurface_uSCR")
+
+# calc_ESA(result_file = "uSCR_real/joint_masked_VPSsurface_NB.RDS",
+#          distr = "NB", prefix_out = "joint_VPSsurface_uSCR")
+
+calc_ESA(result_file = "uSCR_real/joint_masked_VPSasCovar_Pois.RDS",
+         distr = "Pois", prefix_out = "joint_VPSasCovar_uSCR")
+
+
+
+
+UA_df <- bind_rows(
+  calc_95UA(result_file = "uSCR_real/joint_masked_posterior_Pois.RDS",
+           distr = "Pois", prefix_out = "joint_masked_uSCR"),
+  calc_95UA(result_file = "uSCR_real/joint_masked_posterior_NB.RDS",
+           distr = "NB", prefix_out = "joint_masked_uSCR"),
+  calc_95UA(result_file = "uSCR_real/joint_masked_VPSsurface_Pois.RDS",
+           distr = "Pois", prefix_out = "joint_VPSsurface_uSCR"),
+)
+rownames(UA_df) <- NULL
+print(UA_df)
+
+ESA_df <- list.files("ESA_estimates/", pattern = "joint_", full.names = TRUE) %>% 
+  lapply(read_csv) %>% 
+  bind_rows() %>% 
+  filter(current_dir == "Away")
+
+print(ESA_df[c(2,1,3),])
