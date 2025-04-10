@@ -4,6 +4,7 @@ library(terra)
 library(nimble)
 
 if (!dir.exists("intermediate")) dir.create("intermediate")
+if (!dir.exists("intermediate/sim")) dir.create("intermediate/sim")
 
 #### Ben Augustine's custom sSampler ####
 sSampler_noT <- nimbleFunction(
@@ -441,7 +442,12 @@ run_one_uSCR_simulation <- function(iter, M = 1000) {
           paste0("intermediate/sim/simple_", iter, ".RDS"))
 }
 
-run_one_uSCR_simulation_abstract <- function(iter, specs_df, prefix) {
+run_one_uSCR_simulation_abstract <- function(iter, specs_df, prefix, overwrite) {
+  if (!overwrite &&
+      file.exists(paste0("intermediate/sim/", prefix, iter, ".RDS"))) {
+    return(NA)
+  }
+  
   set.seed(specs_df$seed[iter])
   
   stopifnot(is.character(prefix))
@@ -543,6 +549,7 @@ run_one_uSCR_simulation_abstract <- function(iter, specs_df, prefix) {
   mcmc <- buildMCMC(mcmcConf)
   cmcmc <- compileNimble(mcmc)
 
+  simulated_data <- list()
 
   res_list <- list()
   
@@ -551,7 +558,10 @@ run_one_uSCR_simulation_abstract <- function(iter, specs_df, prefix) {
   
   cmod$simulate("z")
   cmod$simulate("s")
-  true_N <- sum(cmod$z)
+  
+  simulated_data$N <- sum(cmod$z)
+  simulated_data$s <- cmod$s
+  simulated_data$z <- cmod$z
   
   cmod$log_sigma <- log_sigma
     
@@ -560,6 +570,10 @@ run_one_uSCR_simulation_abstract <- function(iter, specs_df, prefix) {
   cmod$calculate("lam_sum")
   cmod$simulate("y", includeData = T)
   cmod$setData("y")
+  
+  simulated_data$lam <- cmod$lam
+  simulated_data$lam_sum <- cmod$lam_sum
+  simulated_data$y <- cmod$y
   
   mod$y <- cmod$y
   mod$setData("y")
@@ -570,10 +584,11 @@ run_one_uSCR_simulation_abstract <- function(iter, specs_df, prefix) {
   summary <- MCMCvis::MCMCsummary(samples)
   summary$iter <- iter
   summary$param <- rownames(summary)
-  summary$true_N <- true_N
+  summary$true_N <- simulated_data$N
   rownames(summary) <- NULL
   
   saveRDS(list(summary = summary,
+               simulated_data = simulated_data,
                samples = samples),
           paste0("intermediate/sim/", prefix, iter, ".RDS"))
 }
