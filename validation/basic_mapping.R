@@ -283,3 +283,98 @@ hbmap_wvps <- ggplot() +
 
 hb_all <- arrangeGrob(hbmap, hbmap_wvps, nrow = 2)
 ggsave("plots/hardbottom_map.jpg", hb_all, width = 6, height = 6)
+
+
+camera_pts <- camera_counts %>% 
+  # filter(date == as_date("2023-08-22")) %>% 
+  vect(, geom = c("Longitude", "Latitude"),
+       crs = "+proj=longlat")
+
+hbmap_wcams <- ggplot() +
+  geom_spatraster(data = hardbottom) +
+  geom_spatvector(data = camera_pts, col = "red", size = 1) +
+  theme_minimal() +
+  scale_fill_viridis_d() + 
+  ggtitle("Hardbottom map (w camera locs)")
+ggsave("plots/hardbottom_map_wcam.jpg", hbmap_wcams, width = 6, height = 3)
+
+
+
+
+
+#### Plot the hardbottom mask w cameras ####
+hardbottom <- rast("Data/Chicken_Rock_Map/ChickenRock_Classification.tif")
+
+terra::values(hardbottom) <- ifelse(terra::values(hardbottom) == 4, 1, 0)
+terra::values(hardbottom)[is.na(terra::values(hardbottom))] <- 0
+
+hb_mask <- hardbottom %>% 
+  aggregate(30, fun = "max")
+terra::values(hb_mask)[is.nan(terra::values(hb_mask))] <- 0
+
+hbmask_wcams <- ggplot() +
+  geom_spatraster(data = hb_mask) +
+  geom_spatvector(data = camera_pts, col = "black", size = 2) +
+  theme_minimal() +
+  scale_fill_viridis_c(begin = 0.1, end = 0.8) + 
+  ggtitle("Hardbottom 30 m mask (w camera locs)")
+ggsave("plots/hardbottom_modelmask_wcam.jpg", hbmask_wcams, width = 6, height = 3)
+
+
+
+
+hb_raw <- rast("Data/Chicken_Rock_Map/ChickenRock_Classification.tif")
+
+# Get all the VPS fixes of living fish
+VPS_folder <- "Data/SnapperMvmtAbundanceStudy/VPS_Data/VPS-ChickenRock-01-Results-20240202/results/animal/"
+VPS_files <- list.files(VPS_folder)
+fish_files <- VPS_files[grepl("^12", VPS_files)]
+fish_fate <- read_xlsx("Data/SnapperMvmtAbundanceStudy/VPS_Data/Fate_assignments_from_discard_paper_vps 2023.xlsx")
+fish_to_drop <- fish_fate$`Tag number`[fish_fate$`subsequent assignments based on velocity and depth data` == "Discard mortality"]
+dead_fish_files <- paste0(fish_to_drop, ".csv")
+fish_files <- fish_files[!fish_files %in% dead_fish_files]
+fish_positions <- lapply(file.path(VPS_folder, fish_files),
+                         read_csv) %>% 
+  bind_rows()
+fish_pts <- vect(fish_positions, geom = c("Longitude", "Latitude"),
+                 crs = "+proj=longlat") %>% 
+  project(crs(hb_raw))
+
+e <- ext(fish_pts)
+xmin(e) <- floor(xmin(e) / 50) * 50
+xmax(e) <- ceiling(xmax(e) / 50) * 50
+ymin(e) <- floor(ymin(e) / 50) * 50
+ymax(e) <- ceiling(ymax(e) / 50) * 50
+
+template_grid <- rast(e, res = 50)
+terra::values(template_grid) <- 1:ncell(template_grid)
+
+
+cell_counts <- count(extract(template_grid, fish_pts), lyr.1)
+cell_counts <- left_join(data.frame(lyr.1 = 1:ncell(template_grid)), cell_counts)
+cell_counts$n[is.na(cell_counts$n)] <- 0
+cell_counts$prob <- (cell_counts$n+1) / sum(cell_counts$n+1)
+
+vps_intensity_ras <- template_grid
+terra::values(vps_intensity_ras) <- cell_counts$prob
+crs(vps_intensity_ras) <- crs(fish_pts)
+
+
+vpssurface_wcams <- ggplot() +
+  geom_spatraster(data = vps_intensity_ras) +
+  geom_spatvector(data = camera_pts, col = "black", size = 2) +
+  theme_minimal() +
+  scale_fill_viridis_c(begin = 0.1, end = 0.8) + 
+  ggtitle("VPS intensity surface 30 m (w camera locs)")
+ggsave("plots/VPS_surface.jpg", vpssurface_wcams, width = 6, height = 3)
+
+vpssurface_wcams_log <- ggplot() +
+  geom_spatraster(data = vps_intensity_ras) +
+  geom_spatvector(data = camera_pts, col = "black", size = 2) +
+  theme_minimal() +
+  scale_fill_viridis_c(begin = 0.1, end = 0.8, trans = "log") + 
+  ggtitle("VPS intensity surface 30 m (w camera locs), log-scale")
+ggsave("plots/VPS_surface_logscale.jpg", vpssurface_wcams_log, width = 6, height = 3)
+
+
+

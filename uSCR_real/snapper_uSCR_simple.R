@@ -1,3 +1,8 @@
+library(nimbleEcology)
+library(tidyverse)
+library(readxl)
+library(terra)
+
 
 #### nimbleFunction GetDetectionRate ####
 GetDetectionRate <- nimbleFunction(
@@ -27,11 +32,15 @@ camera_counts <- camera_dat %>%
   group_by(Station_ID, date) %>% 
   summarize(count = sum(total), nframes = n())
 
+camera_locations_corrected <- read_csv("intermediate/corrected_camera_stations.csv") %>% 
+  select(Station_ID, Date, Longitude, Latitude)
+
 camera_locs <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx", sheet = "StationData") %>% 
-  filter(`Camera (A or C)` == "A") %>% 
-  dplyr::select(Station_ID, Date, Time = Start_Time_GMT,
-                Latitude = Start_Latitude, Longitude = Start_Longitude) %>% 
-  left_join(camera_counts, by = c("Station_ID", "Date" = "date"))
+  filter(`Camera (A or C)` == "A") %>%
+  dplyr::select(Station_ID, Date, Time = Start_Time_GMT, 
+                current_dir = `Current Direction`) %>% 
+  left_join(camera_counts, by = c("Station_ID", "Date" = "date")) %>% 
+  left_join(camera_locations_corrected, by = c("Station_ID", "Date"))
 
 
 camera_locs$Longitude <- as.numeric(camera_locs$Longitude)
@@ -160,14 +169,14 @@ mcmcConf <- configureMCMC(cmod, nodes = c("z", "s"))
 mcmcConf$addSampler(target = c("lam0", "psi", "log_sigma"),
                     type = 'AF_slice', control = list(adaptive=TRUE), silent = TRUE)
 
-mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma"))
+mcmcConf$setMonitors(c("lam0", "psi", "n", "s", "log_sigma", "sigma"))
 
 
 mcmc <- buildMCMC(mcmcConf)
 cmcmc <- compileNimble(mcmc)
 
 
-samples <- runMCMC(cmcmc, niter = 30000, nburnin = 5000, nchains = 8,
+samples <- runMCMC(cmcmc, niter = 30000, nburnin = 5000, nchains = 5,
                    thin = 2, samplesAsCodaMCMC = TRUE, 
                    inits = data_template$inits)
 # samples <- runMCMC(cmcmc, niter = 2000, nburnin = 0, nchains = 1,

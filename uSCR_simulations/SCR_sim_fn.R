@@ -3,8 +3,110 @@ library(readxl)
 library(terra)
 library(nimble)
 
+options <- nimbleOptions()
+
+nimbleOptions(MCMCuseConjugacy = FALSE)
+# nimbleOptions()
+# 
 if (!dir.exists("intermediate")) dir.create("intermediate")
 if (!dir.exists("intermediate/sim")) dir.create("intermediate/sim")
+
+dPoisBinom <- nimbleFunction(run = function(x = double(0),
+                                            p = double(1),
+                                            log = logical(0)) {
+  # p <- p[p > 1e-10] # Ignore trials for which p < 1e-10
+  # if (length(p) == 0) {
+  #   if (x == 0) {
+  #     prob <- 1
+  #   } else {
+  #     prob <- 0
+  #   }
+  #   if (log) return(log(prob))
+  #   else return(prob)
+  # }
+
+  n <- length(p)
+  if (x > n) {
+    prob <- 0
+  } else {
+    prob_vec <- numeric(n + 1)
+    prob_vec[1] <- 1
+
+    for (i in 1:n) {
+      q <- 1 - p[i]
+      prob_vec[2:(i + 1)] <- prob_vec[2:(i + 1)] * q + prob_vec[1:i] * p[i]
+      prob_vec[1] <- prob_vec[1] * q
+    }
+    prob <- prob_vec[x + 1]
+  }
+
+
+  if (log) return(log(prob))
+  else return(prob)
+  returnType(double(0))
+})
+
+rPoisBinom <- nimbleFunction(run = function(n = double(0),
+                                            p = double(1)) {
+  if (n != 1) stop("n must equal 1 in rPoisBinom")
+  return(sum(rbinom(n = length(p), size = 1, prob = p)))
+  returnType(double(0))
+})
+
+dPoisBinom_wReps <- nimbleFunction(run = function(x = double(0),
+                                                  p = double(1),
+                                                  reps = integer(0),
+                                                  log = logical(0)) {
+
+  p_filtered <- p[p > 1e-10] # Ignore trials for which p < 1e-10
+  if (length(p_filtered) == 0) {
+    if (x == 0) {
+      prob <- 1
+    } else {
+      prob <- 0
+    }
+    if (log) return(log(prob))
+    else return(prob)
+  }
+  
+  max_successes <- reps * length(p_filtered)
+  probs <- numeric(max_successes + 1)
+  probs[1] <- 1
+  
+  if (x > max_successes) {
+    prob <- 0
+  } else {
+    
+    for (i in 1:length(p_filtered)) {
+      q <- 1 - p_filtered[i]
+
+      new_probs <- numeric(max_successes + 1)
+      
+      for (k in 0:reps) {
+        binom_prob <- dbinom(k, reps, p_filtered[i])
+        new_probs[(k+1):(max_successes+1)] <- 
+          new_probs[(k+1):(max_successes+1)] + probs[1:(max_successes + 1 - k)] * binom_prob
+      }
+      
+      probs <- new_probs
+    }
+    prob <- probs[x + 1]
+  }
+  
+  
+  if (log) return(log(prob))
+  else return(prob)
+  returnType(double(0))
+})
+
+
+rPoisBinom_wReps <- nimbleFunction(run = function(n = double(0),
+                                            p = double(1),
+                                            reps = integer(0)) {
+  if (n != 1) stop("n must equal 1 in rPoisBinom")
+  return(sum(rbinom(n = length(p), size = reps, prob = p)))
+  returnType(double(0))
+})
 
 #### Ben Augustine's custom sSampler ####
 sSampler_noT <- nimbleFunction(
@@ -440,6 +542,140 @@ run_one_uSCR_simulation <- function(iter, M = 1000) {
   saveRDS(list(summary = summary,
                samples = samples),
           paste0("intermediate/sim/simple_", iter, ".RDS"))
+}
+
+
+run_one_uSCR_simulation_binomial <- function(iter, M = 1000) {
+  
+  set.seed(1091 + iter * 41)
+  
+  #### Load a premade template based on real data ####
+  
+  if (file.exists("uSCR_simulations/data_template.RDS")) {
+    data_template <- readRDS("uSCR_simulations/data_template.RDS") 
+  } else {
+    source("uSCR_simulations/prep_sim_template_data.R") # <- this file makes the template dat.
+  }
+  
+  #### Set true values for use in simulation ####
+  
+  psi <- 0.3
+  p0 <- 0.5
+  log_sigma <- 4
+  
+  
+  index_map <- matrix(1:(M*40), nrow = M, byrow = T)
+
+  data_template$constants$M <- M
+  data_template$constants$index_map <- index_map
+  data_template$inits$z <- rbinom(M, 1, 0.5)
+  data_template$inits$p0 <- 0.5
+  data_template$inits$log_sigma <- 7 # higher number is less likely that one site has no dets
+  data_template$inits$s <- array(0, dim = c(M, 3, 2))
+  data_template$inits$s[,,1] <- runif(M * 3,
+                                      data_template$constants$xlim[1], 
+                                      data_template$constants$xlim[2])
+  data_template$inits$s[,,2] <- runif(M * 3,
+                                      data_template$constants$ylim[1], 
+                                      data_template$constants$ylim[2])
+  
+  
+  #### My nimble model ####
+  
+  my_uscr_marginalized <- nimbleCode({
+    # Loop over all potential individuals
+    for (i in 1:M) {
+      # Latent state representing the inclusion prob.
+      
+      z[i] ~ dbern(psi)
+      for (t in 1:3) {
+        
+        # Distribution of centroids
+        s[i, t, 1] ~ dunif(xlim[1],xlim[2])
+        s[i, t, 2] ~ dunif(ylim[1],ylim[2])
+        
+        # Calculate distances
+        detprob[i, 1:ncam[t], t] <- GetDetectionRate(s = s[i, t, 1:2], 
+                                                     X = X[1:ncam[t], t, 1:2], 
+                                                     J = ncam[t], 
+                                                     sigma = sigma, 
+                                                     lam0 = p0, 
+                                                     z = z[i])
+      }
+    }
+    
+    for (t in 1:3) {
+      for (j in 1:ncam[t]) {
+        y[j, t] ~ dPoisBinom_wReps(detprob[1:M, j, t], reps = 40) # per frame
+      }
+    }
+    
+    n <- sum(z[1:M])
+    
+    # Priors
+    psi  ~ dunif(0, 1)   # Inclusion prob. for data augmentation
+    p0 ~ dunif(0, 1)     # Baseline detection
+    # log_sigma ~ dnorm(3.435, sd = 1.138) # From telemetry
+    log_sigma ~ dnorm(5, sd = 0.1) # Tight prior on true value -- best case
+    log(sigma) <- log_sigma
+  })
+  
+  
+  mod <- nimbleModel(
+    code = my_uscr_marginalized, 
+    constants = data_template$constants,
+    data = data_template$data,
+    inits = data_template$inits,
+    calculate = F
+  )
+  
+  cmod <- compileNimble(mod)
+  
+  mcmcConf <- configureMCMC(cmod, nodes = c("z", "s"))
+  mcmcConf$addSampler(target = c("p0", "log_sigma", "psi"), type = "AF_slice")
+  mcmcConf$setMonitors(c("p0", "psi", "n", "log_sigma"))
+  
+  mcmc <- buildMCMC(mcmcConf)
+  cmcmc <- compileNimble(mcmc)
+  
+  res_list <- list()
+  
+  cmod$p0 <- p0
+  cmod$psi <- psi
+  
+  cmod$simulate("z")
+  cmod$simulate("s")
+  true_N <- sum(cmod$z)
+  
+  cmod$log_sigma <- log_sigma
+    
+  cmod$calculate("sigma")
+  cmod$calculate("detprob")
+  cmod$simulate("y", includeData = T)
+  cmod$setData("y")
+  
+  mod$y <- cmod$y
+  mod$setData("y")
+  
+  system.time(mod$calculate())
+  system.time(cmod$calculate())
+  
+  # Takes X minutes to run X samples
+  time_taken <- system.time(
+    samples <- runMCMC(cmcmc, niter = 5000, nburnin = 2000, nchains = 2,
+                       thin = 1, samplesAsCodaMCMC = TRUE)
+  )
+  
+  summary <- MCMCvis::MCMCsummary(samples)
+  summary$iter <- iter
+  summary$param <- rownames(summary)
+  summary$true_N <- true_N
+  rownames(summary) <- NULL
+  
+  saveRDS(list(summary = summary,
+               samples = samples,
+               time_taken = time_taken),
+          paste0("intermediate/sim/simplebinomial_uSCR_", iter, ".RDS"))
 }
 
 run_one_uSCR_simulation_abstract <- function(iter, specs_df, prefix, overwrite) {
