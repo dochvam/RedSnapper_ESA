@@ -545,7 +545,12 @@ run_one_uSCR_simulation <- function(iter, M = 1000) {
 }
 
 
-run_one_uSCR_simulation_binomial <- function(iter, M = 1000) {
+run_one_uSCR_simulation_binomial <- function(iter, M = 1000, niter = 5000,
+                                             nburnin = 2000, nchains = 2, 
+                                             thin = 1, prefix = "",
+                                             sampler_spec = "Default") {
+  
+  stopifnot(sampler_spec %in% c("Default", "RW_block_1", "RW_block_2", "RW_block_3"))
   
   set.seed(1091 + iter * 41)
   
@@ -620,6 +625,7 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000) {
     log(sigma) <- log_sigma
   })
   
+  start_time <- Sys.time()
   
   mod <- nimbleModel(
     code = my_uscr_marginalized, 
@@ -631,9 +637,54 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000) {
   
   cmod <- compileNimble(mod)
   
-  mcmcConf <- configureMCMC(cmod, nodes = c("z", "s"))
-  mcmcConf$addSampler(target = c("p0", "log_sigma", "psi"), type = "AF_slice")
-  mcmcConf$setMonitors(c("p0", "psi", "n", "log_sigma"))
+  if (sampler_spec == "Default") {
+    mcmcConf <- configureMCMC(cmod, nodes = c("z", "s"))
+    mcmcConf$addSampler(target = c("p0", "log_sigma", "psi"), type = "AF_slice")
+  } else if (sampler_spec == "RW_block_1") {
+    
+    mcmcConf <- configureMCMC(cmod, nodes = c("z"))
+    mcmcConf$addSampler(target = c("p0", "log_sigma", "psi"), type = "AF_slice")
+    
+    for (i in 1:M) {
+      mcmcConf$addSampler(target = paste0("s[", i, ",,]"), type = "RW_block", silent = TRUE)
+    }
+    
+    
+  } else if (sampler_spec == "RW_block_2") {
+    
+    mcmcConf <- configureMCMC(cmod, nodes = c("z"))
+    mcmcConf$addSampler(target = c("p0", "log_sigma", "psi"), type = "AF_slice")
+    
+    for (i in 1:ceiling(M/5)) {
+      target_lower <- (i-1)*5 + 1
+      target_upper <- min(M, target_lower + 4)
+      mcmcConf$addSampler(target = paste0("s[", target_lower, ":", target_upper, ",,]"), type = "RW_block", silent = TRUE)
+    }
+    
+  } else if (sampler_spec == "RW_block_3") {
+    
+    mcmcConf <- configureMCMC(cmod, nodes = NULL)
+    mcmcConf$addSampler(target = c("p0", "log_sigma", "psi"), type = "AF_slice")
+    
+    for (i in 1:ceiling(M/10)) {
+      target_lower <- (i-1)*10 + 1
+      target_upper <- min(M, target_lower + 9)
+      mcmcConf$addSampler(target = paste0("s[", target_lower, ":", target_upper, ",,]"), type = "RW_block", silent = TRUE)
+    }
+    
+    for (i in 1:ceiling(M/2)) {
+      target_lower <- (i-1)*2 + 1
+      target_upper <- min(M, target_lower + 1)
+      mcmcConf$addSampler(target = paste0("z[", target_lower, ":", target_upper, "]"), type = "RW_block", silent = TRUE)
+    }
+    
+    target_list <- mcmcConf$getSamplers() %>% lapply(function(x) x$target) %>% unlist()
+    target_inds <- which(target_list %in% c("p0", "log_sigma", "psi"))
+    mcmcConf$samplerExecutionOrder <- append(mcmcConf$samplerExecutionOrder, target_inds,
+                                             after = length(mcmcConf$samplerExecutionOrder) / 2)
+  }
+  
+  mcmcConf$setMonitors(c("p0", "psi", "n", "log_sigma", "s", "z"))
   
   mcmc <- buildMCMC(mcmcConf)
   cmcmc <- compileNimble(mcmc)
@@ -657,14 +708,17 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000) {
   mod$y <- cmod$y
   mod$setData("y")
   
-  system.time(mod$calculate())
-  system.time(cmod$calculate())
-  
+  # system.time(mod$calculate())
+  # system.time(cmod$calculate())
+  start_mcmc_time <- Sys.time()
+
   # Takes X minutes to run X samples
-  time_taken <- system.time(
-    samples <- runMCMC(cmcmc, niter = 5000, nburnin = 2000, nchains = 2,
-                       thin = 1, samplesAsCodaMCMC = TRUE)
-  )
+  
+  samples <- runMCMC(cmcmc, niter = niter, nburnin = nburnin, nchains = nchains,
+                     thin = thin, samplesAsCodaMCMC = TRUE)
+  
+  
+  end_mcmc_time <- Sys.time()
   
   summary <- MCMCvis::MCMCsummary(samples)
   summary$iter <- iter
@@ -674,8 +728,16 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000) {
   
   saveRDS(list(summary = summary,
                samples = samples,
-               time_taken = time_taken),
-          paste0("intermediate/sim/simplebinomial_uSCR_", iter, ".RDS"))
+               diagnostics = data.frame(
+                 M = M,
+                 niter = niter,
+                 nchains = nchains,
+                 sampler_spec = sampler_spec,
+                 build_time = difftime(start_mcmc_time, start_time, units = "secs"),
+                 mcmc_time = difftime(end_mcmc_time, start_mcmc_time, units = "secs")
+               )
+               ),
+          paste0("intermediate/sim/", prefix, "simplebinomial_uSCR_", iter, ".RDS"))
 }
 
 run_one_uSCR_simulation_abstract <- function(iter, specs_df, prefix, overwrite) {
