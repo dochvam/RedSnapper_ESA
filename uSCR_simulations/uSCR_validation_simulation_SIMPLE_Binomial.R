@@ -16,9 +16,10 @@ cl <- makeCluster(8)
 captured <- clusterEvalQ(cl, source("uSCR_simulations/SCR_sim_fn.R"))
 
 result <- parLapply(cl = cl, X = 8 + 1:8, fun = run_one_uSCR_simulation_binomial,
-                    M = 1000)
+                    niter = 6000, nburnin = 1000, nchains = 2, thin = 1,
+                    M = 1000, sampler_spec = "RW_block_2", prefix = "sim_validation_")
 
-summary <- list.files("intermediate/sim/", pattern = "simplebinomial_", full.names = T) %>% 
+summary <- list.files("intermediate/sim/", pattern = "sim_validation_simplebinomial_", full.names = T) %>% 
   lapply(function(x) readRDS(x)$summary) %>% 
   bind_rows()
 

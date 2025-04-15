@@ -246,15 +246,15 @@ plot_camera_x_rov <- vps_results %>%
   # filter(FullId == trans_IDs[i]) %>% 
   mutate(time_abs = as.numeric(difftime(Time, min(Time), units = "hour"))) %>% 
   ggplot(aes(Longitude, Latitude)) +
-  geom_bin_2d() +
+  geom_bin_2d(alpha = 0.7) +
   geom_point(data = vps_stations, col = "#222222", pch = 3) +
   geom_point(data = rov_summarized, aes(size = density), col = "black") +
   theme_minimal() +
-  scale_size_continuous("Camera counts") +
+  scale_size_continuous("RS count density on ROVs") +
   scale_fill_viridis_c(option = "plasma", "Num. VPS fixes", 
                        trans = "log", breaks = c(1, 20, 400, 8000), 
                        begin = 0.1, end = 0.9) +
-  ggtitle("ROV x camera data")
+  ggtitle("ROV x VPS data")
 
 ggsave("plots/VPS_ROV_overlay.jpg", plot_camera_x_rov, 
        width = 5, height = 4, dpi = 300)
@@ -377,4 +377,83 @@ vpssurface_wcams_log <- ggplot() +
 ggsave("plots/VPS_surface_logscale.jpg", vpssurface_wcams_log, width = 6, height = 3)
 
 
+#### plot the hardbottom mask with ROV transects ####
+ROV_transect_locs <- read_csv("Data/SnapperMvmtAbundanceStudy/CountData/ROV/ROV_latlong_real_2023_processed.csv")
 
+df_split <- split(ROV_transect_locs, 
+                  paste0(ROV_transect_locs$Site_ID, ROV_transect_locs$Date, ROV_transect_locs$transect))
+line_geoms <- lapply(df_split, 
+                     function(group) {
+  as.matrix(group[, c("longitude", "latitude")])
+})
+
+# Create the line SpatVector
+lines_vect <- vect(line_geoms, type = "lines", crs = "+proj=longlat") %>% 
+  project(crs(vps_intensity_ras))
+
+line_attributes <- do.call(rbind, lapply(df_split, function(group) {
+  group[1, c("Site_ID", "Date", "transect")]  # retain one row per group
+}))
+
+# Assign attributes to the spatial object
+values(lines_vect) <- line_attributes
+
+
+vpssurface_wROVs_log <- ggplot() +
+  geom_spatraster(data = vps_intensity_ras) +
+  geom_spatvector(data = lines_vect, col = "black", linewidth = 0.75) +
+  # geom_label(data = as.data.frame(terra::centroids(lines_vect), geom = "XY"),
+  #            aes(x = x, y = y, label = Site_ID),
+  #            size = 2,
+  #            fontface = "bold",
+  #            color = "black") +
+  theme_minimal() +
+  scale_fill_viridis_c(begin = 0.1, end = 0.8, trans = "log") + 
+  ggtitle("VPS intensity surface 30 m (w camera locs), log-scale")+
+  facet_wrap(~Date)
+
+ggsave("plots/ROV_real_transects_overlay.jpg", vpssurface_wROVs_log, width = 6, height = 3)
+
+
+
+
+# Check relationship between reported and apparent lengths
+rov_dat_raw <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/ROV/ROV_NC_2023_Formatted_.xlsx")
+
+rov_dat <- bind_rows(
+  rov_dat_raw %>% 
+    select(
+      Site_ID = `Site:`,
+      Date = `Date:`,
+      Latitude = LAT, 
+      Longitude = LONG,
+      length = `Transect Length1`,
+      area = `Area Surveyed1`,
+      hab_complexity = `Habitat Complexity1`,
+      structured_pct = `Structured Habitat %Cover1`,
+      count = Count1
+    ) %>% 
+    mutate(Transect = 1),
+  rov_dat_raw %>% 
+    select(
+      Site_ID = `Site:`,
+      Date = `Date:`,
+      Latitude = LAT, 
+      Longitude = LONG,
+      length = `Transect Length2`,
+      area = `Area Surveyed2`,
+      hab_complexity = `Habitat Complexity2`,
+      structured_pct = `Structured Habitat %Cover2`,
+      count = count2
+    ) %>% 
+    mutate(Transect = 2)
+) %>% 
+  select(Site_ID, Transect, Date, length_reported = length)
+
+lines_df <- as.data.frame(lines_vect)
+lines_df$length_ll <- perim(lines_vect)
+
+left_join(rov_dat, lines_df, by = c("Site_ID", "Transect" = 'transect', "Date")) %>% 
+  ggplot() + 
+  geom_point(aes(length_reported, length_ll)) +
+  geom_abline(slope = 1, intercept = 0)
