@@ -2,7 +2,7 @@ source("uSCR_simulations/SCR_sim_fn.R")
 
 #### Default samplers ####
 
-M_vec <- 1:10 * 20
+M_vec <- 1:4 * 20
 
 for (i in 1:length(M_vec)) {
   for (t in 1:2) {
@@ -10,7 +10,7 @@ for (i in 1:length(M_vec)) {
                                              M = M_vec[i], 
                                              niter = 50, nburnin = 0, 
                                              nchains = 1, thin = 1,
-                                             prefix = "SPEEDTEST_")
+                                             prefix = "SPEEDTEST_upfiltered_")
   }
 }
 
@@ -25,7 +25,15 @@ result <- lapply(result_files, function(x) readRDS(x)$diagnostics) %>%
   mutate(M_sq = M^2) %>% 
   mutate(type = "Default")
 
-ggplot(result, aes(M^2, as.numeric(time_per_iter))) +
+result_uf_files <- list.files("intermediate/sim", pattern = "SPEEDTEST_upfiltered_simplebinomial", full.names = T)
+result_uf <- lapply(result_uf_files, function(x) readRDS(x)$diagnostics) %>% 
+  bind_rows() %>% 
+  mutate(time_per_iter = as.numeric(mcmc_time) / 50) %>% 
+  # bind_rows(validation_test$diagnostics %>% mutate(time_per_iter = as.numeric(mcmc_time) / 5)) %>% 
+  mutate(M_sq = M^2) %>% 
+  mutate(type = "Upfiltered")
+
+ggplot(bind_rows(result, result_uf), aes(M_sq, as.numeric(time_per_iter), group = type, col = type)) +
   geom_point() +
   geom_smooth()
 
@@ -114,25 +122,34 @@ for (i in 1:length(M_vec)) {
                                              niter = 50, nburnin = 0, 
                                              nchains = 1, thin = 1, 
                                              sampler_spec = "RW_block_2", 
-                                             prefix = "SPEEDTEST_RWB2_")
+                                             prefix = "SPEEDTEST_RWB2_upfiltered_")
   }
 }
 
 
 
 result_files <- list.files("intermediate/sim", pattern = "SPEEDTEST_RWB2_simplebinomial", full.names = T)
-
-summary <- lapply(result_files, function(x) readRDS(x)$summary) %>% 
-  bind_rows()
-  
 result3 <- lapply(result_files, function(x) readRDS(x)$diagnostics) %>% 
   bind_rows() %>% 
   mutate(time_per_iter = as.numeric(mcmc_time) / 50) %>% 
-  bind_rows(validation_test$diagnostics %>% mutate(time_per_iter = as.numeric(mcmc_time) / 10)) %>% 
+  # bind_rows(validation_test$diagnostics %>% mutate(time_per_iter = as.numeric(mcmc_time) / 10)) %>% 
   mutate(M_sq = M^2) %>% 
   mutate(type = "RWB2")
 
+result_uf_files <- list.files("intermediate/sim", pattern = "SPEEDTEST_RWB2_upfiltered_simplebinomial", full.names = T)
+result3_uf <- lapply(result_uf_files, function(x) readRDS(x)$diagnostics) %>% 
+  bind_rows() %>% 
+  mutate(time_per_iter = as.numeric(mcmc_time) / 50) %>% 
+  # bind_rows(validation_test$diagnostics %>% mutate(time_per_iter = as.numeric(mcmc_time) / 10)) %>% 
+  mutate(M_sq = M^2) %>% 
+  mutate(type = "RWB2_Upfiltered")
+
 ggplot(bind_rows(result2, result3, result), aes(group = type, col = type, 
+                                       M^2, as.numeric(time_per_iter))) +
+  geom_point() +
+  geom_smooth()
+
+ggplot(bind_rows(result, result_uf, result3, result3_uf), aes(group = type, col = type, 
                                        M^2, as.numeric(time_per_iter))) +
   geom_point() +
   geom_smooth()
@@ -190,11 +207,10 @@ summary <- lapply(result_files, function(x) readRDS(x)$summary) %>%
 result4 <- lapply(result_files, function(x) readRDS(x)$diagnostics) %>% 
   bind_rows() %>% 
   mutate(time_per_iter = as.numeric(mcmc_time) / 50) %>% 
-  bind_rows(validation_test$diagnostics %>% mutate(time_per_iter = as.numeric(mcmc_time) / 10)) %>% 
   mutate(M_sq = M^2) %>% 
   mutate(type = "RWB3")
 
-ggplot(bind_rows(result2, result3, result), aes(group = type, col = type, 
+ggplot(bind_rows(result2, result3, result4, result), aes(group = type, col = type, 
                                                 M^2, as.numeric(time_per_iter))) +
   geom_point() +
   geom_smooth()

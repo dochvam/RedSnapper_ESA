@@ -57,8 +57,9 @@ dPoisBinom_wReps <- nimbleFunction(run = function(x = double(0),
                                                   p = double(1),
                                                   reps = integer(0),
                                                   log = logical(0)) {
-
-  p_filtered <- p[p > 1e-10] # Ignore trials for which p < 1e-10
+# 
+  # p_filtered <- p
+  p_filtered <- p[p > 1e-5] # Ignore trials for which p < 1e-10
   if (length(p_filtered) == 0) {
     if (x == 0) {
       prob <- 1
