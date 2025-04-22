@@ -160,10 +160,11 @@ rPoisBinom <- nimbleFunction(run = function(n = double(0),
 dPoisBinom_wReps <- nimbleFunction(run = function(x = double(0),
                                                   p = double(1),
                                                   reps = integer(0),
+                                                  p_cutoff = double(0),
                                                   log = logical(0)) {
   # 
   # p_filtered <- p
-  p_filtered <- p[p > 1e-5] # Ignore trials for which p < 1e-10
+  p_filtered <- p[p > p_cutoff] # Ignore trials for which p < 1e-10
   if (length(p_filtered) == 0) {
     if (x == 0) {
       prob <- 1
@@ -207,9 +208,12 @@ dPoisBinom_wReps <- nimbleFunction(run = function(x = double(0),
 
 rPoisBinom_wReps <- nimbleFunction(run = function(n = double(0),
                                                   p = double(1),
+                                                  p_cutoff = double(0),
                                                   reps = integer(0)) {
   if (n != 1) stop("n must equal 1 in rPoisBinom")
-  return(sum(rbinom(n = length(p), size = reps, prob = p)))
+  p_filtered <- p[p > p_cutoff]
+  if (length(p_filtered) == 0) return(0)
+  return(sum(rbinom(n = length(p_filtered), size = reps, prob = p_filtered)))
   returnType(double(0))
 })
 

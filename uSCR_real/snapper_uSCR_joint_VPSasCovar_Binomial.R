@@ -177,11 +177,13 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000,
                      rb_weights = intersections_df$weight,
                      rov_cell_xvec = intersections_df$x_ind,
                      rov_cell_yvec = intersections_df$y_ind,
-                     rbe = rbe, rbs = rbs
+                     rbe = rbe, rbs = rbs,
+                     p_cutoff = 1e-6
     ),
     data = list(
       y = y_mtx,
       ROV_obs = rov_dat$count
+      # p_cutoff = 1e-5
     ),
     inits = list(
       z = matrix(ncol = 3, rbinom(M*3, 1, 0.75)),
@@ -249,7 +251,7 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000,
     
     for (t in 1:3) {
       for (j in 1:ncam[t]) {
-        y[j, t] ~ dPoisBinom_wReps(detprob[1:M, j, t], reps = nframes[j, t]) # per frame
+        y[j, t] ~ dPoisBinom_wReps(detprob[1:M, j, t], reps = nframes[j, t], p_cutoff = p_cutoff) # per frame
       }
       
       n[t] <- sum(z[1:M, t])
