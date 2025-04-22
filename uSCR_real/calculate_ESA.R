@@ -40,7 +40,9 @@ calc_ESA <- function(result_file, distr, prefix_out) {
         esa_posterior[i, j] <- sum(prob_one_det * cell_area)
       }
     } else if (distr == "Binom") {
-      stop("Ben, implement binomial")
+      for (j in 1:3) {
+        esa_posterior[i, j] <- (samples_mtx[i, "sigma"] * sqrt(2 * samples_mtx[i, paste0("p0[", j, "]")]))^2 * base::pi # from half-normal EDD
+      }
     } else {
       stop("Unrecognized distribution")
     }
@@ -88,7 +90,10 @@ calc_ESA(result_file = "uSCR_real/joint_masked_VPSsurface_Pois.RDS",
 #          distr = "NB", prefix_out = "joint_VPSsurface_uSCR")
 
 calc_ESA(result_file = "uSCR_real/joint_masked_VPSasCovar_Pois.RDS",
-         distr = "Pois", prefix_out = "joint_VPSasCovar_uSCR")
+         distr = "Pois", prefix_out = "joint_VPSasCovar_uSCR_wROV")
+
+calc_ESA(result_file = "uSCR_real/joint_masked_VPSasCovar_Pois_uninformativePrior.RDS",
+         distr = "Pois", prefix_out = "joint_VPSasCovar_uninformativePrior_uSCR_wROV")
 
 
 

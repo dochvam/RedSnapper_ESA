@@ -119,6 +119,7 @@ cam_pts <- bind_rows(stations_pts, cam_pos_pts)
 cam_plot <- ggplot(cam_pts, aes(x, y, group = Station_ID)) +
   geom_point(aes(col = type)) +
   geom_line() +
+  # geom_label(aes(x, y, label =Station_ID)) +
   ggtitle("Trap locations") +
   scale_color_viridis_d(end = 0.8) +
   theme_bw() +
@@ -136,7 +137,9 @@ ggsave("plots/VPSvalidation_camera.jpg", cam_plot, width = 4.6, height = 5)
 # For each camera, find the VPS fix closest to the recorded drop point 
 # that occurred during the survey, if any
 stations_pts$start_time <- difftime(stations_pts$Start_Time_GMT, as_date("1899-12-31"), units = "mins")
-stations_pts$end_time <- stations_pts$start_time + 30
+stations_pts$start_time[stations_pts$Date != as_date("2023-08-22")] <- stations_pts$start_time[stations_pts$Date != as_date("2023-08-22")] - 60
+
+stations_pts$end_time <- stations_pts$start_time + 60
 stations_pts$x_corrected <- NA
 stations_pts$y_corrected <- NA
 stations_pts$corrected <- NA
@@ -146,13 +149,16 @@ for (i in 1:nrow(stations_pts)) {
   vps_during_survey <- cam_pos_pts %>% 
     mutate(time_since_SOD = difftime(Time, Date, units = "mins")) %>% 
     filter(Date == as_date(stations_pts$Date[i]),
-           time_since_SOD <= stations_pts$end_time[i], 
-           time_since_SOD >= stations_pts$start_time[i]) %>% 
+           time_since_SOD <= stations_pts$end_time[i],
+           time_since_SOD >= stations_pts$start_time[i]
+           ) %>% 
     mutate(distance = sqrt((stations_pts$x[i]  - x)^2 +
                            (stations_pts$y[i]  - y)^2))
   
+  print(vps_during_survey$distance)
+  
   min_dist_index <- which.min(vps_during_survey$distance)
-  if (nrow(vps_during_survey) > 1 && vps_during_survey$dist[min_dist_index] < 50) {
+  if (nrow(vps_during_survey) > 1 && vps_during_survey$distance[min_dist_index] < 30) {
     stations_pts$corrected[i] <- TRUE
     stations_pts$x_corrected[i] <- vps_during_survey$x[min_dist_index]
     stations_pts$y_corrected[i] <- vps_during_survey$y[min_dist_index]
@@ -171,6 +177,8 @@ stations_pts2 <- stations_pts %>%
   project("+proj=longlat") %>% 
   as.data.frame(geom = "XY") %>% 
   rename(Longitude = x, Latitude = y)
+
+nrow(distinct(stations_pts2, Date, Longitude, Latitude))
 
 write_csv(stations_pts2, "intermediate/corrected_camera_stations.csv")
 

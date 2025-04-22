@@ -10,7 +10,9 @@ esa_results <- lapply(esa_files, read_csv) %>%
   rename(type = prefix)
 
 esa_results$type[grepl("VPSsurface", esa_results$type)] <- "uSCR_VPS_surface"
-esa_results$type[grepl("VPSasCovar", esa_results$type)] <- "uSCR_VPS_asCovar"
+esa_results$type[grepl("VPSasCovar_uSCR_sansROV", esa_results$type)] <- "uSCR_VPS_asCovar_sansROV"
+esa_results$type[grepl("VPSasCovar_uSCR_wROV", esa_results$type)] <- "uSCR_VPS_asCovar_wROV"
+esa_results$type[grepl("VPSasCovar_uninformative", esa_results$type)] <- "uSCR_VPS_asCovar_uninformativePrior"
 esa_results$type[grepl("masked", esa_results$type)] <- "uSCR_hab_mask"
 esa_results$name <- paste0(esa_results$type, "_", esa_results$distr)
 

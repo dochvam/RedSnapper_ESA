@@ -11,6 +11,68 @@ nimbleOptions(MCMCuseConjugacy = FALSE)
 if (!dir.exists("intermediate")) dir.create("intermediate")
 if (!dir.exists("intermediate/sim")) dir.create("intermediate/sim")
 
+
+# Custom RJ sampler from Sally Paganin + Daniel Eacker + Perry de Valpine
+my_sampler_MV_RJ_indicator <- nimbleFunction(
+  name = 'my_sampler_MV_RJ_indicator',
+  contains = sampler_BASE,
+  setup = function(model, mvSaved, target, control) {
+    ## note: target is the indicator variable,
+    ## control$targetNode is the variable conditionally in the model
+    ## control list extraction
+    coefNode      <- model$expandNodeNames(control$targetNode, returnScalarComponents = TRUE)
+    # coefNodes     <- control$targetNode
+    
+    proposalScale <- control$scale
+    proposalMean  <- control$mean
+    len_coefNode <- length(coefNode) # It is better to do this in setup code and use below
+    
+    
+    ## node list generation
+    calcNodes <- model$getDependencies(c(coefNode, target))
+    calcNodesReduced <- model$getDependencies(target)
+  },
+  run = function() {
+    currentIndicator <- model[[target]]
+    if(currentIndicator == 0) {   ## propose addition of coefNode
+      currentLogProb <- model$getLogProb(calcNodesReduced)
+      proposalCoef <- numeric(len_coefNode)
+      logProbForwardProposal <- 0
+      for(l in 1:len_coefNode) {
+        
+        proposalCoef[l] <- rnorm(1, proposalMean, proposalScale)
+        logProbForwardProposal <- logProbForwardProposal + dnorm(proposalCoef[l], proposalMean, proposalScale, log = TRUE)
+      }
+      values(model, coefNode) <<- proposalCoef
+      
+      model[[target]] <<- 1
+      proposalLogProb <- model$calculate(calcNodes)
+      logAcceptanceProb <- proposalLogProb - currentLogProb - logProbForwardProposal
+    } else {                      ## propose removal of coefNode
+      currentLogProb <- model$getLogProb(calcNodes)
+      currentCoef <-  values(model, coefNode)
+      logProbReverseProposal<- 0
+      for(l in 1:len_coefNode) {
+        
+        logProbReverseProposal <- logProbReverseProposal + dnorm(currentCoef[l], proposalMean, proposalScale, log = TRUE)
+      }
+      values(model, coefNode) <<- rep(0, len_coefNode)
+      
+      model[[target]] <<- 0
+      model$calculate(calcNodes)
+      logAcceptanceProb <- model$getLogProb(calcNodesReduced) - currentLogProb + logProbReverseProposal
+    }
+    accept <- decide(logAcceptanceProb)
+    if(accept) { copy(from = model, to = mvSaved, row = 1, nodes = calcNodes, logProb = TRUE)
+    } else     { copy(from = mvSaved, to = model, row = 1, nodes = calcNodes, logProb = TRUE) }
+  },
+  methods = list(
+    reset = function() { }
+  )
+)
+
+
+
 dPoisBinom <- nimbleFunction(run = function(x = double(0),
                                             p = double(1),
                                             log = logical(0)) {
@@ -551,7 +613,7 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000, niter = 5000,
                                              thin = 1, prefix = "",
                                              sampler_spec = "Default") {
   
-  stopifnot(sampler_spec %in% c("Default", "RW_block_1", "RW_block_2", "RW_block_3"))
+  stopifnot(sampler_spec %in% c("Default", "RW_block_1", "RW_block_2", "RW_block_3", "RJMCMC"))
   
   set.seed(1091 + iter * 41)
   
@@ -574,7 +636,7 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000, niter = 5000,
 
   data_template$constants$M <- M
   data_template$constants$index_map <- index_map
-  data_template$inits$z <- rbinom(M, 1, 0.5)
+  data_template$inits$z <- matrix(rbinom(3*M, 1, 0.5), ncol = 3)
   data_template$inits$p0 <- 0.5
   data_template$inits$log_sigma <- 7 # higher number is less likely that one site has no dets
   data_template$inits$s <- array(0, dim = c(M, 3, 2))
@@ -593,8 +655,8 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000, niter = 5000,
     for (i in 1:M) {
       # Latent state representing the inclusion prob.
       
-      z[i] ~ dbern(psi)
       for (t in 1:3) {
+        z[i, t] ~ dbern(psi)
         
         # Distribution of centroids
         s[i, t, 1] ~ dunif(xlim[1],xlim[2])
@@ -606,7 +668,7 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000, niter = 5000,
                                                      J = ncam[t], 
                                                      sigma = sigma, 
                                                      lam0 = p0, 
-                                                     z = z[i])
+                                                     z = z[i, t])
       }
     }
     
@@ -616,10 +678,10 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000, niter = 5000,
       }
     }
     
-    n <- sum(z[1:M])
+    n <- sum(z[1:M, 1:3]) / 3
     
     # Priors
-    psi  ~ dunif(0, 1)   # Inclusion prob. for data augmentation
+    psi ~ dbeta(0.01, 1)   # Inclusion prob. for data augmentation
     p0 ~ dunif(0, 1)     # Baseline detection
     # log_sigma ~ dnorm(3.435, sd = 1.138) # From telemetry
     log_sigma ~ dnorm(5, sd = 0.1) # Tight prior on true value -- best case
@@ -633,7 +695,8 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000, niter = 5000,
     constants = data_template$constants,
     data = data_template$data,
     inits = data_template$inits,
-    calculate = F
+    calculate = F, 
+    buildDerivs = F
   )
   
   cmod <- compileNimble(mod)
@@ -683,6 +746,33 @@ run_one_uSCR_simulation_binomial <- function(iter, M = 1000, niter = 5000,
     target_inds <- which(target_list %in% c("p0", "log_sigma", "psi"))
     mcmcConf$samplerExecutionOrder <- append(mcmcConf$samplerExecutionOrder, target_inds,
                                              after = length(mcmcConf$samplerExecutionOrder) / 2)
+  } else if (sampler_spec == "RJMCMC") {
+    
+    mcmcConf <- configureMCMC(cmod, nodes = c("s"))
+    
+    mcmcConf$addSampler(target = c("p0", "log_sigma", "psi"), type = "AF_slice")
+    
+    # combos <- expand.grid(1:3, 1:2)
+    nodeControl <- list(mean = 0, scale = 100)
+    for (i in 1:M) {
+      for (t in 1:3) {
+        nodeControl$targetNode_c <- paste0("s[", i, ", ", t, ", 1:2]") # supply concatenated version of variable to deal with model[[coefNode]]
+        nodeControl$targetNode <- paste0("s[", i, ",", t, ",", 1:2, "]")
+        mcmcConf$addSampler(type = my_sampler_MV_RJ_indicator,
+                            target = paste0("z[", i, ",", t, "]"),
+                            control = nodeControl)
+        
+        for (r in 1:2) {
+          this_node <- paste0("s[", i, ",", t, ",", r, "]")
+          ## Add sampler for the coefficient variable (when is in the model)
+          currentConf <- mcmcConf$getSamplers(this_node)
+          mcmcConf$removeSamplers(this_node)
+          mcmcConf$addSampler(type = sampler_RJ_toggled,
+                              target = this_node,
+                              control = list(samplerType = currentConf[[1]]))   
+        }
+      }
+    }
   }
   
   mcmcConf$setMonitors(c("p0", "psi", "n", "log_sigma", "s", "z"))

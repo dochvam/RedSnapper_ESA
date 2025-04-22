@@ -212,6 +212,7 @@ fit <- lmer(log_sigma ~ log(t_interval) + (1 | FullId), data = all_all_results)
 summary(fit)
 
 fit <- lm(log_sigma ~ log(t_interval), data = all_all_results)
+summary(fit)
 
 predict(fit, newdata = data.frame(t_interval = 60 * 6), se.fit = T)
 

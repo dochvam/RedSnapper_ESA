@@ -2,16 +2,17 @@ library(nimbleEcology)
 library(tidyverse)
 library(readxl)
 library(terra)
-library(coda)
+library(parallel)
 
-source("uSCR_real/uscr_pois_helper.R")
+nimbleOptions(MCMCuseConjugacy = FALSE)
+source("uSCR_real/uscr_binom_helper.R")
 
-run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, nchains = 1, nburnin = 1000, thin = 1) {
-    
+#### Construct the VPS intensity surface ####
+run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, 
+                                     nchains = 1, nburnin = 1000, thin = 1,
+                                     test_model_only = FALSE) {
   start_time <- Sys.time()
-  set.seed(4026973 + iter * 333)
-  
-  #### Construct the VPS intensity surface ####
+  set.seed(568792 + iter * 333)
   
   hb_raw <- rast("Data/Chicken_Rock_Map/ChickenRock_Classification.tif")
   
@@ -74,8 +75,9 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, nchai
   intersections_df <- processed_buffers_result$intersections_df
   rov_dat <- processed_buffers_result$rov_dat
   
-  
   #### Format the camera data ####
+  # M <- 1000
+  
   # Get the real camera locations and deployment times for use in the simulation
   
   camera_dat <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx") %>% 
@@ -182,20 +184,21 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, nchai
       ROV_obs = rov_dat$count
     ),
     inits = list(
-      z = matrix(ncol = 3, rbinom(M*3, 1, 0.1)),
-      psi = 0.1,
-      lam0 = rep(0.1, 3),
-      log_sigma = 4,
-      sigma = exp(4),
-      spatial_beta = 0.5,
+      z = matrix(ncol = 3, rbinom(M*3, 1, 0.75)),
+      psi = 0.2,
+      # lam0 = rep(0.1, 3),
+      log_sigma = 4.4,
+      sigma = exp(4.4),
+      spatial_beta = 0.3,
+      p0 = rep(0.1, 3),
       s = initialize_s(n = M, t = 3,
                        xmin = grid_bbox[1],
                        xmax = grid_bbox[2],
                        ymin = grid_bbox[3],
                        ymax = grid_bbox[4],
                        resoln = 50, 
-                       spatial_beta = 0.4,
-                       habitatMask = vps_mtx)
+                       habitatMask = vps_mtx,
+                       spatial_beta = 0.4)
     )
   )
   
@@ -214,7 +217,7 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, nchai
       ROV_obs[i] ~ dpois(pctFishInROVbuffer[i] * psi * M)
     }
     
-    phi[1:hm_nrow, 1:hm_ncol] <- exp(spatial_beta * log(hm[1:hm_nrow, 1:hm_ncol]))
+    phi[1:hm_nrow, 1:hm_ncol] <- exp(spatial_beta * log(hm[1:hm_nrow, 1:hm_ncol])) # hm is log-scale covariate
     
     # Loop over all potential individuals
     for (i in 1:M) {
@@ -232,13 +235,13 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, nchai
           resoln = resoln,
           phi = phi[1:hm_nrow, 1:hm_ncol]
         )
-  
+        
         # Calculate distances
-        lambda[i, 1:ncam[t], t] <- GetDetectionRate(s = s[i, t, 1:2], 
+        detprob[i, 1:ncam[t], t] <- GetDetectionRate(s = s[i, t, 1:2], 
                                                     X = X[1:ncam[t], t, 1:2], 
                                                     J = ncam[t], 
                                                     sigma = sigma, 
-                                                    lam0 = lam0[1:3],
+                                                    lam0 = p0[1:3],
                                                     current_dir = current_dir[1:ncam[t], t],
                                                     z = z[i, t])
       }
@@ -246,8 +249,7 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, nchai
     
     for (t in 1:3) {
       for (j in 1:ncam[t]) {
-        lambda_sum[j, t] <- sum(lambda[1:M, j, t] * nframes[j, t])
-        y[j, t] ~ dpois(lambda_sum[j, t])
+        y[j, t] ~ dPoisBinom_wReps(detprob[1:M, j, t], reps = nframes[j, t]) # per frame
       }
       
       n[t] <- sum(z[1:M, t])
@@ -257,13 +259,13 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, nchai
     # Priors
     psi ~ dbeta(0.01, 1) # Scale prior for inclusion prob.
     for (i in 1:3) {
-      lam0[i] ~ dgamma(0.1, 1)  # Detection rate per frame at centroid, depends on current dir.
+      p0[i] ~ dunif(0, 1)  # Detection rate per frame at centroid, depends on current dir.
     }
     spatial_beta ~ dnorm(1, sd = 1)
-  
+    
     log_sigma ~ dnorm(3.435, sd = 1.138) # From telemetry
     log(sigma) <- log_sigma
-  
+    
     # sigma ~ dunif(1, 1000) # <- uninformative prior
     # log_sigma <- log(sigma)
   })
@@ -273,52 +275,82 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000, nchai
     code = my_uscr, 
     constants = data_template$constants,
     data = data_template$data,
-    inits = data_template$inits
+    inits = data_template$inits,
+    calculate = F
   )
   
   cmod <- compileNimble(mod)
+  if (test_model_only) return(cmod$calculate())
   
-  # We want custom samplers for everything except z, s
-  mcmcConf <- configureMCMC(cmod, nodes = c("z", "s", "spatial_beta"))
   
-  #### Custom samplers
-  #use block update for lam0, psi, and var bc correlated posteriors.
-  mcmcConf$addSampler(target = c("lam0", "psi", "log_sigma"),
-  # mcmcConf$addSampler(target = c("lam0", "psi", "sigma"),
-                      type = 'AF_slice', control = list(adaptive=TRUE), silent = TRUE)
+  mcmcConf <- configureMCMC(cmod, nodes = c("s", "spatial_beta"))
+  mcmcConf$addSampler(target = c("p0", "log_sigma", "psi"), type = "AF_slice")
+
+  # combos <- expand.grid(1:3, 1:2)
+  nodeControl <- list(mean = 0, scale = 1)
+  for (i in 1:M) {
+    for (t in 1:3) {
+      nodeControl$targetNode_c <- paste0("s[", i, ", ", t, ", 1:2]") # supply concatenated version of variable to deal with model[[coefNode]]
+      nodeControl$targetNode <- paste0("s[", i, ",", t, ",", 1:2, "]")
+      mcmcConf$addSampler(type = my_sampler_MV_RJ_indicator,
+                          target = paste0("z[", i, ",", t, "]"),
+                          control = nodeControl)
+
+      this_node <- paste0("s[", i, ",", t, ", 1:2]")
+      ## Add sampler for the coefficient variable (when is in the model)
+      currentConf <- mcmcConf$getSamplers(this_node)
+      mcmcConf$removeSamplers(this_node)
+      mcmcConf$addSampler(type = my_sampler_RJ_toggled,
+                          target = this_node,
+                          control = list(samplerType = currentConf[[1]],
+                                         fixedValue = c(0,0)))
+    }
+  }
   
-  mcmcConf$setMonitors(c("lam0", "psi", "n", "log_sigma", "sigma", "spatial_beta"))
+  # 
+  # # We want custom samplers for everything except z, s
+  # mcmcConf <- configureMCMC(cmod, nodes = c("z", "spatial_beta"))
+  # 
+  # #### Custom samplers
+  # #use block update for lam0, psi, and var bc correlated posteriors.
+  # mcmcConf$addSampler(target = c("lam0", "psi", "log_sigma"),
+  #                     # mcmcConf$addSampler(target = c("lam0", "psi", "sigma"),
+  #                     type = 'AF_slice', control = list(adaptive=TRUE), silent = TRUE)
+  
+  mcmcConf$setMonitors(c("p0", "psi", "n", "log_sigma", "sigma", "spatial_beta", "s", "z"))
   
   
   mcmc <- buildMCMC(mcmcConf)
   cmcmc <- compileNimble(mcmc)
   
   mcmc_start_time <- Sys.time()
-  # samples <- runMCMC(cmcmc, niter = 1000, nburnin = 0, nchains = 2,
   samples <- runMCMC(cmcmc, niter = niter, nburnin = nburnin, nchains = nchains,
                      thin = thin, samplesAsCodaMCMC = TRUE, 
                      inits = data_template$inits)
   mcmc_end_time <- Sys.time()
+  
+  # samples <- runMCMC(cmcmc, niter = 2000, nburnin = 0, nchains = 1,
+  #                    thin = 1, samplesAsCodaMCMC = TRUE)
   
   summary <- MCMCvis::MCMCsummary(samples)
   summary$param <- rownames(summary)
   
   rownames(summary) <- NULL
   end_time <- Sys.time()
+  
   saveRDS(list(summary = summary,
                samples = samples,
                mcmc_time = difftime(mcmc_end_time, mcmc_start_time, units = "mins"),
-               total_time = difftime(mcmc_end_time, mcmc_start_time, units = "mins")
+               total_time = difftime(end_time, start_time, units = "mins")
                ),
           # paste0("uSCR_real/joint_masked_VPSasCovar_Pois_uninformativePrior.RDS"))
-          paste0("uSCR_real/", prefix, iter, "_Pois.RDS"))
-
+          paste0("uSCR_real/", prefix, iter, "_Binom.RDS"))
 }
 
 
 
 
-cl <- makeCluster(4)
+cl <- makeCluster(5)
 capture <- clusterEvalQ(cl, {
   library(nimbleEcology)
   library(tidyverse)
@@ -327,19 +359,26 @@ capture <- clusterEvalQ(cl, {
   library(parallel)
   
   nimbleOptions(MCMCuseConjugacy = FALSE)
-  source("uSCR_real/uscr_pois_helper.R")
+  source("uSCR_real/uscr_binom_helper.R")
 })
 
-parLapply(cl, 1:4, run_one_uscr_chain_binom, 
-          prefix = "uSCR_real_T1_", niter = 50000, M = 300, nburnin = 5000, thin = 5, nchains = 1)
+parLapply(cl, 1:5, run_one_uscr_chain_binom, 
+          prefix = "uSCR_real_RJMCMC_", niter = 100, M = 500, 
+          nburnin = 0, thin = 1, nchains = 1, test_model_only = FALSE
+          )
 
 stopCluster(cl)
 rm(cl)
 
-samples_list <- lapply(list.files("uSCR_real/", pattern = "uSCR_real_T1", full.names = TRUE),
-                      function(x) {
-                        readRDS(x)$samples
-                      })
 
-all_samples <- as.mcmc.list(samples_list)
-this_summary <- MCMCvis::MCMCsummary(all_samples)
+summary_all <- lapply(list.files("uSCR_real/", pattern = "uSCR_real_RJ", full.names = TRUE),
+       function(x) {
+         readRDS(x)$summary %>% 
+           mutate(fn = x)
+       }) %>% 
+  bind_rows()
+times <- lapply(list.files("uSCR_real/", pattern = "uSCR_real_RJ", full.names = TRUE),
+       function(x) {
+         readRDS(x)$mcmc_time
+       }) %>% 
+  unlist()

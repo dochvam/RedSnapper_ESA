@@ -16,7 +16,7 @@ for (i in 1:length(M_vec)) {
 
 
 
-result_files <- list.files("intermediate/sim", pattern = "SPEEDTEST_simplebinomial", full.names = T)
+result_files <- list.files("intermediate/sim", pattern = "SPEEDTEST_upfiltered_simplebinomial", full.names = T)
 
 result <- lapply(result_files, function(x) readRDS(x)$diagnostics) %>% 
   bind_rows() %>% 
@@ -214,3 +214,53 @@ ggplot(bind_rows(result2, result3, result4, result), aes(group = type, col = typ
                                                 M^2, as.numeric(time_per_iter))) +
   geom_point() +
   geom_smooth()
+
+
+
+
+
+
+#### RJMCMC ####
+
+for (i in 1:length(M_vec)) {
+  for (t in 1:2) {
+    test <- run_one_uSCR_simulation_binomial(iter = 1110 + i + t*10000, 
+                                             M = M_vec[i], 
+                                             niter = 50, nburnin = 0, 
+                                             nchains = 1, thin = 1,
+                                             prefix = "RJMCMC_", sampler_spec = "RJMCMC")
+  }
+}
+
+
+
+result_rj_files <- list.files("intermediate/sim", pattern = "RJMCMC_simplebinomial", full.names = T)
+
+result_rj <- lapply(result_rj_files, function(x) readRDS(x)$diagnostics) %>% 
+  bind_rows() %>% 
+  mutate(time_per_iter = as.numeric(mcmc_time) / 50) %>% 
+  # bind_rows(validation_test$diagnostics %>% mutate(time_per_iter = as.numeric(mcmc_time) / 5)) %>% 
+  mutate(M_sq = M^2) %>% 
+  mutate(type = "RJ")
+
+result_uf_files <- list.files("intermediate/sim", pattern = "SPEEDTEST_upfiltered_simplebinomial", full.names = T)
+result_uf <- lapply(result_uf_files, function(x) readRDS(x)$diagnostics) %>% 
+  bind_rows() %>% 
+  mutate(time_per_iter = as.numeric(mcmc_time) / 50) %>% 
+  # bind_rows(validation_test$diagnostics %>% mutate(time_per_iter = as.numeric(mcmc_time) / 5)) %>% 
+  mutate(M_sq = M^2) %>% 
+  mutate(type = "Upfiltered")
+
+ggplot(bind_rows(result_rj, result_uf), aes(M_sq, as.numeric(time_per_iter), group = type, col = type)) +
+  geom_point() +
+  geom_smooth()
+
+ggplot(result, aes(M, as.numeric(build_time))) +
+  geom_point() +
+  geom_smooth()
+
+fit <- lm(as.numeric(time_per_iter) ~ M + M_sq, data = result)
+summary(fit)
+
+predict(fit, newdata = data.frame(M = c(100, 200, 600, 1000)) %>% mutate(M_sq = M^2))
+
