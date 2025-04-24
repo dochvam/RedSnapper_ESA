@@ -1,3 +1,5 @@
+library(nimble)
+
 
 #------------------------------------------------------------------
 # Everything in this script was written by Ben Augustine

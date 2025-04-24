@@ -1,3 +1,4 @@
+library(nimble)
 
 GetDetectionProb_wDates <- nimbleFunction(
   run = function(s = double(1), p0=double(0), sigma=double(0), 
@@ -259,7 +260,8 @@ sim_ROV <- function(nROV,
                     rbe, 
                     rbs,
                     spatial_beta,
-                    habitatMask) {
+                    habitatMask,
+                    sim.out) {
   
   ROV_obs <- numeric(nROV)
   phi <- exp(spatial_beta * log(habitatMask))

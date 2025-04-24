@@ -1,6 +1,7 @@
 ### In this script---use Ben Augustine's code to implement the binomial USCR.
 ###    Use a simulation framework, but try to add our real locations and
 ###    also add the VPS surface.
+
 library(tidyverse)
 library(readxl)
 library(terra)
@@ -212,7 +213,8 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
                         rov_cell_yvec = intersections_df$y_ind,
                         rbe = rbe, rbs = rbs, 
                         spatial_beta = true_spatial_beta, 
-                        habitatMask = vps_mtx)
+                        habitatMask = vps_mtx,
+                        sim.out = sim.out)
   
   #### Make NIMBLE model input lists ####
   
@@ -451,7 +453,7 @@ capture <- clusterEvalQ(cl, {
 })
 
 # Run one simulation chains in parallel
-parLapply(cl, 10 + 1:5, run_one_uscr_chain_binom, 
+parLapply(cl, 10 + 1:5, binomial_sim_per_Augustine, 
           prefix = "_sim_", niter = 50000, M = 1500, 
           nburnin = 5000, thin = 1, thin2 = 25, nchains = 2)
 
