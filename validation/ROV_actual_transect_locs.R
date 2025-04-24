@@ -10,6 +10,7 @@ colnames(temp) <- paste0("X", 1:5)
 
 temp$X5[159] <- "34 37.357N 76 08.686W"
 temp$X5[63] <-  "34 37.437N 76 08.686W"
+temp$X5[113] <- "34 37.398N 76 08.278W"
 
 for (i in c(36:39, 51:60, 126:134)) {
   for (col in paste0("X", 3:5)) {
@@ -17,7 +18,9 @@ for (i in c(36:39, 51:60, 126:134)) {
   }
 }
 
-
+temp$X5[121:124] <- c("34 37.354N 76 08.187W", "34 37.307N 76 08.174W", "34 37.272N 76 08.207W", "34 37.210N 76 08.190W")
+temp$X4[122] <- "34 37.327N 76 08.178W"
+temp$X4[124] <- "34 37.266N 76 08.193W"
 
 reprocess <- distinct(temp, X1, X2) %>% 
   rename(Site_ID = X1, Date_Numeric = X2) %>% 
@@ -67,12 +70,11 @@ ROV_transect_locs <- reprocess %>%
 write_csv(ROV_transect_locs, "Data/SnapperMvmtAbundanceStudy/CountData/ROV/ROV_latlong_real_2023_processed.csv")
 
 
-
 ggplot(ROV_transect_locs) +
   geom_path(aes(longitude, latitude, group = paste0(Site_ID, transect, Date))) +
   # geom_point(aes(longitude, latitude, col = point)) +
   facet_wrap(~Date, nrow = 2) +
-  theme_bw() + coord_fixed() # +
+  theme_bw() + coord_fixed()  #+
   # geom_label(aes(longitude, latitude, label = Site_ID), size = 2)
 
 

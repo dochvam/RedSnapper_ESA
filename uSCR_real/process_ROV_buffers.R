@@ -90,7 +90,8 @@ process_ROV_buffers <- function(buffer_size, surface_to_buffer) {
   rov_dat <- rov_dat %>% 
     left_join(line_attributes, by = c("Site_ID", "Date", "transect")) %>% 
     mutate(ROV_ID = paste(Site_ID, Date, transect, sep = "_")) %>% 
-    arrange(ROV_ID)
+    arrange(ROV_ID) %>% 
+    filter(!is.na(buffer_area))
   
   rbs <- rbe <- numeric(nrow(rov_dat))
   for (i in 1:length(rbs)) {
@@ -106,4 +107,9 @@ process_ROV_buffers <- function(buffer_size, surface_to_buffer) {
   ))
 }
 
-
+# 
+# ggplot(rov_dat) +
+#   geom_point(aes(area, buffer_area)) +
+#   geom_abline(slope = 1, intercept = 0) +
+#   geom_label(aes(area, buffer_area, label = paste(Site_ID, Date, transect)), size = 2)
+# 

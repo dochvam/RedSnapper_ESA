@@ -66,10 +66,10 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000,
   
   #### Load both days of ROV data ####
   
-  surface_to_buffer <- vps_intensity_ras 
+  surface_to_buffer <- vps_intensity_ras
   source("uSCR_real/process_ROV_buffers.R")
   
-  processed_buffers_result <- process_ROV_buffers(buffer_size = 5, surface_to_buffer = surface_to_buffer)
+  processed_buffers_result <- process_ROV_buffers(buffer_size = 4.9, surface_to_buffer = surface_to_buffer)
   rbe <- processed_buffers_result$rbe
   rbs <- processed_buffers_result$rbs
   intersections_df <- processed_buffers_result$intersections_df
@@ -178,7 +178,7 @@ run_one_uscr_chain_binom <- function(iter, prefix, M = 500, niter = 10000,
                      rov_cell_xvec = intersections_df$x_ind,
                      rov_cell_yvec = intersections_df$y_ind,
                      rbe = rbe, rbs = rbs,
-                     p_cutoff = 1e-6
+                     p_cutoff = 1e-4
     ),
     data = list(
       y = y_mtx,

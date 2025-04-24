@@ -15,9 +15,9 @@ library(parallel)
 cl <- makeCluster(4)
 captured <- clusterEvalQ(cl, source("uSCR_simulations/SCR_sim_fn.R"))
 
-result <- parLapply(cl = cl, X = 400 + 1:4, fun = run_one_uSCR_simulation_binomial,
+result <- parLapply(cl = cl, X = 600 + 1:4, fun = run_one_uSCR_simulation_binomial,
                     niter = 5000, nburnin = 0, nchains = 2, thin = 1,
-                    M = 300, sampler_spec = "RJMCMC", prefix = "sim_validation_RJMCMC_")
+                    M = 50, sampler_spec = "RJMCMC", prefix = "sim_validation_RJMCMC_")
 
 summary <- list.files("intermediate/sim/", pattern = "sim_validation_RJMCMC_simplebinomial_", full.names = T) %>% 
   lapply(function(x) readRDS(x)$summary) %>% 
