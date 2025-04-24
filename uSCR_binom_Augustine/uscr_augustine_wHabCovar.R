@@ -254,6 +254,7 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
                                   s_init, 
                                   this.j = sim.out$this.j,
                                   this.k = sim.out$this.k,
+                                  X_mtx = X_mtx,
                                   X_datevec = X_datevec, 
                                   idate = constants$idate,
                                   n.samples = sim.out$n.samples,
@@ -450,6 +451,8 @@ capture <- clusterEvalQ(cl, {
   
   # Source file: Ben Goldstein's helper fns
   source("uSCR_binom_Augustine/other_helper.R")
+  
+  nimbleOptions(determinePredictiveNodesInModel = FALSE)
 })
 
 # Run one simulation chains in parallel

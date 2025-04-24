@@ -219,7 +219,7 @@ sim_counts_wHabCovar <- function(M, psi, p0, sigma, X_mtx, X_datevec,
   ))
 }
 
-initialize_ytrue <- function(M, z_init, s_init, this.j, this.k,
+initialize_ytrue <- function(M, z_init, s_init, this.j, this.k, X_mtx,
                              X_datevec, idate, n.samples, sigma_init, p0_init, K) {
   # ytrue2D needs to be a matrix of [M] x [J], compatible with z, with sum = n.samples
   
