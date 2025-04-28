@@ -49,6 +49,8 @@ colors <- c(
 
 ESA_compare <- esa_results %>%
   filter(!grepl("Count", type)) %>%
+  filter(name %in% c("Binom_VPSasCovar_wROV_Binom", "uSCR_VPS_asCovar_wROV_Pois",
+                     "Zulian_etal")) %>% 
   bind_rows(data.frame(
     name = "Zulian_etal", current_dir = c("Away", "Perpendicular", "Towards"),
     ESA_q50  = c(0.047, 0.064, 0.009) * 1e6, 

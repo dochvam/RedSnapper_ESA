@@ -1,9 +1,10 @@
 library(nimble)
 
 GetDetectionProb_wDates <- nimbleFunction(
-  run = function(s = double(1), p0=double(0), sigma=double(0), 
+  run = function(s = double(1), p0=double(1), sigma=double(0), 
                  datevec = double(1), idate = double(0),
-                 X_mtx=double(2), J=double(0), z=double(0)){ 
+                 X_mtx=double(2), current_dir = double(1),
+                 J=double(0), z=double(0)){ 
     returnType(double(1))
     if(z==0) return(rep(0,J))
     if(z==1){
@@ -12,7 +13,7 @@ GetDetectionProb_wDates <- nimbleFunction(
       for (j in 1:J) {
         if (datevec[j] == idate) {
           d2[j] <- (s[1]-X_mtx[j,1])^2 + (s[2]-X_mtx[j,2])^2
-          ans[j] <- p0 * exp(-d2[j]/(2*sigma^2))
+          ans[j] <- p0[current_dir[j]] * exp(-d2[j]/(2*sigma^2))
         } else {
           d2[j] <- 0
           ans[j] <- 0
@@ -120,7 +121,7 @@ rHabDistr_asCovar <- nimbleFunction(run = function(n = double(0),
 
 
 # sim_counts <- function(M, psi, p0, sigma, X, hm, spatial_beta) {
-sim_counts <- function(M, psi, p0, sigma, X_mtx, X_datevec, xlim, ylim, J, K) {
+sim_counts <- function(M, psi, p0, sigma, current_dir, X_mtx, X_datevec, xlim, ylim, J, K) {
   
   N <- rbinom(1, M / 3, psi)
   
@@ -136,6 +137,7 @@ sim_counts <- function(M, psi, p0, sigma, X_mtx, X_datevec, xlim, ylim, J, K) {
     # this_inds <- which(X_datevec == i_datevec[i])
     this_p <- GetDetectionProb_wDates(s = s[i,1:2], X_mtx = X_mtx, 
                                       datevec = X_datevec, idate = idate[i],
+                                      current_dir = current_dir,
                                       J=nrow(X_mtx), sigma=sigma, p0=p0, z=1)
     for (k in 1:K) {
       y[, k] <- y[, k] + rbinom(J, 1, this_p)
@@ -168,6 +170,7 @@ sim_counts <- function(M, psi, p0, sigma, X_mtx, X_datevec, xlim, ylim, J, K) {
 
 
 sim_counts_wHabCovar <- function(M, psi, p0, sigma, X_mtx, X_datevec, 
+                                 current_dir,
                                  xlim, ylim, J, K, resoln, habitatMask,
                                  spatial_beta) {
   
@@ -190,6 +193,7 @@ sim_counts_wHabCovar <- function(M, psi, p0, sigma, X_mtx, X_datevec,
     # this_inds <- which(X_datevec == i_datevec[i])
     this_p <- GetDetectionProb_wDates(s = s[i,1:2], X_mtx = X_mtx, 
                                       datevec = X_datevec, idate = idate[i],
+                                      current_dir = current_dir,
                                       J=nrow(X_mtx), sigma=sigma, p0=p0, z=1)
     for (k in 1:K) {
       y[, k] <- y[, k] + rbinom(J, 1, this_p)
@@ -219,7 +223,7 @@ sim_counts_wHabCovar <- function(M, psi, p0, sigma, X_mtx, X_datevec,
   ))
 }
 
-initialize_ytrue <- function(M, z_init, s_init, this.j, this.k, X_mtx,
+initialize_ytrue <- function(M, z_init, s_init, this.j, this.k, X_mtx, current_dir,
                              X_datevec, idate, n.samples, sigma_init, p0_init, K) {
   # ytrue2D needs to be a matrix of [M] x [J], compatible with z, with sum = n.samples
   
@@ -227,6 +231,7 @@ initialize_ytrue <- function(M, z_init, s_init, this.j, this.k, X_mtx,
   for (i in 1:nrow(detprobs)) {
     detprobs[i,] <- GetDetectionProb_wDates(s = s_init[i,1:2], X_mtx = X_mtx, 
                                            datevec = X_datevec, idate = idate[i],
+                                           current_dir = current_dir,
                                            J=nrow(X_mtx), sigma=sigma_init, p0=p0_init, z=z_init[i])
   }
   

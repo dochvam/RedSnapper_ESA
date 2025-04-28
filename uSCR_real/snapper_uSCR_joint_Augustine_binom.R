@@ -18,8 +18,7 @@ source("uSCR_binom_Augustine/other_helper.R")
 
 nimbleOptions(determinePredictiveNodesInModel = FALSE)
 
-binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000, 
-                                       true_log_sigma = 3.435,
+fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000, 
                                        nchains = 1, nburnin = 1000, 
                                        thin = 1, thin2 = 10) {
   start_time <- Sys.time()
@@ -27,7 +26,7 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
   stopifnot(M %% 3 == 0)
   
   start_time <- Sys.time()
-  set.seed(568792 + iter * 333) # set seed based on "iter" for reproducibility
+  set.seed(14432 + iter * 333) # set seed based on "iter" for reproducibility
   
   #### Process the real data ####
   # First, we process all the real data. This allows us to define simulation data
@@ -110,9 +109,14 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
     mutate(time = as.numeric(difftime(time, as_datetime("1899-12-31 00:00:00"), units = "sec"))) %>% 
     filter(camera == "A", time > 60 * 10, time <= 60 * 30) # Filter out descent/retrieval frames
   
-  camera_counts <- camera_dat %>%
+  camera_detmtx <- camera_dat %>%
+    select(Station_ID, date, total) %>% 
     group_by(Station_ID, date) %>% 
-    summarize(count = sum(total), nframes = n())
+    mutate(col = paste0("V", row_number())) %>% 
+    pivot_wider(names_from = col, values_from = total)
+  obs_cols <- colnames(camera_detmtx)[3:ncol(camera_detmtx)]
+  
+  y_mtx <- as.matrix(camera_detmtx[, obs_cols])
   
   camera_locations_corrected <- read_csv("intermediate/corrected_camera_stations.csv") %>% 
     select(Station_ID, Date, Longitude, Latitude)
@@ -121,7 +125,6 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
     filter(`Camera (A or C)` == "A") %>%
     dplyr::select(Station_ID, Date, Time = Start_Time_GMT, 
                   current_dir = `Current Direction`) %>% 
-    left_join(camera_counts, by = c("Station_ID", "Date" = "date")) %>% 
     left_join(camera_locations_corrected, by = c("Station_ID", "Date"))
   
   camera_locs$current_dir <- ifelse(
@@ -129,6 +132,9 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
     ifelse(grepl("away", tolower(camera_locs$current_dir)), 2, 3)
   )
   
+  # Make sure order of camera locs matches order of detection history
+  stopifnot(all(camera_locs$Station_ID == camera_detmtx$Station_ID) &
+              all(camera_locs$Date == camera_detmtx$date))
   
   camera_locs$Longitude <- as.numeric(camera_locs$Longitude)
   
@@ -150,32 +156,13 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
   
   #### Data reformatting for model ####
   
-  # Make a matrix of observed counts
+
+  # Make a 3D array of camera coords  
   mtx_nrow <- max(table(camera_locs$Date))
   ncam_vec <- numeric(3)
-  y_mtx <- matrix(ncol = 3, nrow = mtx_nrow)
-  for (i in 1:3) {
-    ncam_vec[i] <- sum(camera_locs$Date == Dates[i])
-    y_mtx[1:ncam_vec[i], i] <- camera_locs$count[camera_locs$Date == Dates[i]]
-  }
-  
-  # Make a matrix of frames per camera
-  nframe_mtx <- y_mtx
-  for (i in 1:3) {
-    ncam_vec[i] <- sum(camera_locs$Date == Dates[i])
-    nframe_mtx[1:ncam_vec[i], i] <- camera_locs$nframes[camera_locs$Date == Dates[i]]
-  }
-  
-  current_dir_mtx <- y_mtx 
-  for (i in 1:3) {
-    ncam_vec[i] <- sum(camera_locs$Date == Dates[i])
-    current_dir_mtx[1:ncam_vec[i], i] <- camera_locs$current_dir[camera_locs$Date == Dates[i]]
-  }
-  
-  
-  # Make a 3D array of camera coords  
   X_array <- array(dim = c(mtx_nrow, 3, 2))
   for (i in 1:3) {
+    ncam_vec[i] <- sum(camera_locs$Date == Dates[i])
     X_array[1:ncam_vec[i], i, 1] <- X$x[camera_locs$Date == Dates[i]]
     X_array[1:ncam_vec[i], i, 2] <- X$y[camera_locs$Date == Dates[i]]
   }
@@ -191,32 +178,45 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
   ylim <- grid_bbox[3:4]
   J <- nrow(X_mtx)
   
-  K <- 20
-  true_spatial_beta <- 0.75
-  true_psi <- 0.5
-  true_p0 <- c(0.7, 0.9, 0.7)
-  true_sigma <- exp(true_log_sigma)
+  K <- ncol(y_mtx)
   
-  sim.out <- sim_counts_wHabCovar(
-    M = M, psi = true_psi, p0 = true_p0, sigma = true_sigma, 
-    X_mtx = X_mtx, X_datevec = X_datevec,
-    J = J, xlim = xlim, ylim = ylim, K = K,
-    resoln = resoln, current_dir = camera_locs$current_dir,
-    habitatMask = vps_mtx,
-    spatial_beta = true_spatial_beta
-  )
+  
+  n.samples <- sum(y_mtx)
+  
+  this.j <- this.k <- rep(NA,n.samples)
+  idx <- 1
+  for(j in 1:J){ #then traps
+    for(k in 1:K){ #then occasions
+      if(y_mtx[j,k]>0){ #is there at least one sample here?
+        for(l in 1:y_mtx[j,k]){ #then samples
+          this.j[idx] <- j
+          this.k[idx] <- k
+          idx <- idx+1
+        }
+      }
+    }
+  }
+  
+  # sim.out <- sim_counts_wHabCovar(
+  #   M = M, psi = true_psi, p0 = true_p0, sigma = true_sigma, 
+  #   X_mtx = X_mtx, X_datevec = X_datevec,
+  #   J = J, xlim = xlim, ylim = ylim, K = K,
+  #   resoln = resoln,
+  #   habitatMask = vps_mtx,
+  #   spatial_beta = true_spatial_beta
+  # )
   
   # this.j and this.k describe the samples and occasions on which each detection occurred
   
   # Simulate ROV data #
-  ROV_counts <- sim_ROV(nROV = nrow(rov_dat),
-                        rb_weights = intersections_df$weight,
-                        rov_cell_xvec = intersections_df$x_ind,
-                        rov_cell_yvec = intersections_df$y_ind,
-                        rbe = rbe, rbs = rbs, 
-                        spatial_beta = true_spatial_beta, 
-                        habitatMask = vps_mtx,
-                        sim.out = sim.out)
+  # ROV_counts <- sim_ROV(nROV = nrow(rov_dat),
+  #                       rb_weights = intersections_df$weight,
+  #                       rov_cell_xvec = intersections_df$x_ind,
+  #                       rov_cell_yvec = intersections_df$y_ind,
+  #                       rbe = rbe, rbs = rbs, 
+  #                       spatial_beta = true_spatial_beta, 
+  #                       habitatMask = vps_mtx,
+  #                       sim.out = sim.out)
   
   #### Make NIMBLE model input lists ####
   
@@ -224,7 +224,7 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
                     J = J,
                     current_dir = camera_locs$current_dir,
                     K1D = rep(K, J),
-                    n.samples = sim.out$n.samples,
+                    n.samples = n.samples,
                     xlim = xlim,
                     ylim = ylim,
                     datevec = X_datevec,
@@ -234,8 +234,6 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
                     hm_ncol = ncol(vps_mtx),
                     resoln = res(vps_intensity_ras)[1],
                     nROV = nrow(rov_dat),
-                    true_log_sigma = true_log_sigma,
-                    # ROV_hb_area = rov_dat$area * rov_dat$structured_pct,
                     rb_weights = intersections_df$weight,
                     rov_cell_xvec = intersections_df$x_ind,
                     rov_cell_yvec = intersections_df$y_ind,
@@ -253,17 +251,17 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
   )
   sigma_init <- exp(4.5)
   log_sigma_init <- 4.5
-  p0_init <- rep(0.9, 3)
+  p0_init <- rep(0.8, 3)
   y.true.init <- initialize_ytrue(M,
                                   z_init, 
                                   s_init, 
-                                  this.j = sim.out$this.j,
-                                  this.k = sim.out$this.k,
+                                  this.j = this.j,
+                                  this.k = this.k,
                                   X_mtx = X_mtx,
-                                  X_datevec = X_datevec, 
                                   current_dir = camera_locs$current_dir,
+                                  X_datevec = X_datevec, 
                                   idate = constants$idate,
-                                  n.samples = sim.out$n.samples,
+                                  n.samples = n.samples,
                                   sigma_init = sigma_init, p0_init = p0_init, K = K)
   
   Niminits <- list(z = z_init,
@@ -280,8 +278,8 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
   
   
   Nimdata <- list(y.true=matrix(NA,nrow=(M),ncol=J),
-                  ROV_obs = ROV_counts,
-                  ID = rep(NA, sim.out$n.samples),
+                  ROV_obs = rov_dat$count,
+                  ID = rep(NA, n.samples),
                   z = rep(NA, M),
                   X = as.matrix(X_mtx),
                   capcounts=rep(NA, M))
@@ -293,8 +291,8 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
     for (i in 1:3) {
       p0[i] ~ dunif(0,1) #baseline detection probability on logit scale
     }
-
-    log_sigma ~ dnorm(true_log_sigma, sd = 0.5) # for test purposes, informative prior around true log sigma
+    
+    log_sigma ~ dnorm(3.435, sd = 1.138) # for test purposes, informative prior around true log sigma
     sigma <- exp(log_sigma)
     
     N ~ dpois(lambda.N) #realized abundance
@@ -312,15 +310,15 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
         resoln = resoln,
         phi = phi[1:hm_nrow, 1:hm_ncol]
       )
-
+      
       pd[i,1:J] <- GetDetectionProb_wDates(s = s[i,1:2], 
                                            X = X[1:J, 1:2], 
                                            J=J, 
                                            sigma=sigma, 
                                            datevec = datevec[1:J],
-                                           idate = idate[i],
-                                           p0=p0[1:3],
                                            current_dir = current_dir[1:J],
+                                           idate = idate[i],
+                                           p0=p0[1:3], 
                                            z=z[i])
       
       y.true[i,1:J] ~ dBernoulliVector(pd=pd[i, 1:J],
@@ -346,15 +344,15 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
   #### Build the model ####
   
   parameters <- c('lambda.N', 'p0', 'log_sigma', 'sigma', 'N', 'n', 'spatial_beta')
-
+  
   parameters2 <- c("ID", 's', 'z')
-
+  
   # Build the model, configure the mcmc, and compile
   start.time <- Sys.time()
   Rmodel <- nimbleModel(code=model_code, constants=constants, data=Nimdata,check=FALSE,
                         inits=Niminits)
   
-  config.nodes <- c("lambda.N", "p0", "log_sigma","spatial_beta")
+  config.nodes <- c("lambda.N","p0","log_sigma","spatial_beta")
   # config.nodes <- c()
   conf <- configureMCMC(Rmodel,monitors=parameters, thin=thin, 
                         monitors2=parameters2, thin2=thin2, nodes=config.nodes,
@@ -369,9 +367,9 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
   IDups <- 2
   conf$addSampler(target = paste0("y.true[1:",M,",1:",J,"]"),
                   type = 'IDSampler',control = list(M = M, J = J, K=K,
-                                                    this.j = sim.out$this.j,
-                                                    this.k = sim.out$this.k,
-                                                    n.samples = sim.out$n.samples,
+                                                    this.j = this.j,
+                                                    this.k = this.k,
+                                                    n.samples = n.samples,
                                                     IDups = IDups),
                   silent = TRUE)
   
@@ -431,152 +429,13 @@ binomial_sim_per_Augustine <- function(iter, prefix, M = 500*3, niter = 10000,
   saveRDS(list(summary = summary,
                samples = mcmc_samples$samples,
                samples2 = mcmc_samples$samples2,
-               truth_df = data.frame(
-                 p0_1 = true_p0[1],
-                 p0_2 = true_p0[2],
-                 p0_3 = true_p0[3],
-                 spatial_beta = true_spatial_beta,
-                 sigma = true_sigma,
-                 log_sigma = true_log_sigma,
-                 N = sim.out$trueN,
-                 N3 = sim.out$trueN3
-               ),
                mcmc_time = difftime(mcmc_end_time, mcmc_start_time, units = "mins"),
                total_time = difftime(end_time, start_time, units = "mins")
   ),
-  paste0("intermediate/sim/uSCR_Augustine_Binom", prefix, iter, ".RDS"))
+  paste0("uSCR_real/uSCR_real_Augustine_Binom", prefix, iter, ".RDS"))
 }
 
 
-# Run 5 chains in parallel
-cl <- makeCluster(5)
 
-# Load all packages and helper fns within each process environment
-capture <- clusterEvalQ(cl, {
-  library(tidyverse)
-  library(readxl)
-  library(terra)
-  library(parallel)
-  library(nimble)
-  library(coda)
-  library(MCMCvis)
-  
-  # Source file: Ben Augustine's helper fns
-  source("uSCR_binom_Augustine/augustine_helper.R")
-  
-  # Source file: Ben Goldstein's helper fns
-  source("uSCR_binom_Augustine/other_helper.R")
-  
-  nimbleOptions(determinePredictiveNodesInModel = FALSE)
-})
-
-# Run simulations in parallel
-parLapply(cl, 10000 + 1:5, binomial_sim_per_Augustine, 
-          prefix = "_sim_", niter = 50000, M = 1500, 
-          true_log_sigma = 5,
-          nburnin = 20000, thin = 2, thin2 = 25, nchains = 2)
-
-parLapply(cl, 1000 + 1:5, binomial_sim_per_Augustine, 
-          prefix = "_sim_", niter = 50000, M = 1500, 
-          true_log_sigma = 6.5,
-          nburnin = 20000, thin = 2, thin2 = 25, nchains = 2)
-
-parLapply(cl, 100 + 1:5, binomial_sim_per_Augustine, 
-          prefix = "_sim_", niter = 50000, M = 1500, 
-          true_log_sigma = 3.5,
-          nburnin = 20000, thin = 2, thin2 = 25, nchains = 2)
-
-stopCluster(cl)
-rm(cl)
-
-
-summary <- list.files("intermediate/sim/", pattern = "uSCR_Augustine_Binom_sim", full.names = T) %>% 
-  lapply(function(x) {
-    temp <- readRDS(x)
-    temp$summary$param <- rownames(temp$summary)
-    rownames(temp$summary) <- NULL
-    
-    temp$summary$true_N <- temp$truth_df$N3
-    temp$summary$true_sigma <- temp$truth_df$sigma
-    temp$summary$true_log_sigma <- temp$truth_df$log_sigma
-    temp$summary$true_p0 <- temp$truth_df$p0
-    temp$summary$true_spatial_beta <- temp$truth_df$spatial_beta
-    temp$summary$iter   <- parse_number(x)
-    
-    temp$summary
-  }) %>% 
-  bind_rows()
-
-summary %>% 
-  filter(param == "N") %>% 
-  ggplot() + 
-  geom_point(aes(iter, true_N), col = "red", size = 2) +
-  geom_pointrange(aes(iter, mean, ymin = `2.5%`, ymax = `97.5%`)) +
-  ylab("Estimated population") + xlab("Simulation iter.") +
-  theme_minimal() +
-  coord_flip()
-
-
-summary %>% 
-  filter(param == "p0") %>% 
-  ggplot() + 
-  geom_point(aes(iter, true_p0), col = "red", size = 2) +
-  geom_pointrange(aes(iter, mean, ymin = `2.5%`, ymax = `97.5%`)) +
-  ylab("Estimated population") + xlab("Simulation iter.") +
-  theme_minimal() +
-  coord_flip()
-
-
-summary %>% 
-  filter(param == "spatial_beta") %>% 
-  ggplot() + 
-  geom_point(aes(iter, true_spatial_beta), col = "red", size = 2) +
-  geom_pointrange(aes(iter, mean, ymin = `2.5%`, ymax = `97.5%`)) +
-  ylab("Estimated population") + xlab("Simulation iter.") +
-  theme_minimal() +
-  coord_flip()
-
-
-summary %>% 
-  filter(param == "sigma") %>% 
-  ggplot() + 
-  geom_point(aes(iter, true_sigma), col = "red", size = 2) +
-  geom_pointrange(aes(iter, mean, ymin = `2.5%`, ymax = `97.5%`)) +
-  ylab("Sigma") + xlab("Simulation iter.") +
-  theme_minimal() +
-  coord_flip()
-
-
-
-
-test <- readRDS("intermediate/sim/uSCR_Augustine_Binom_sim_11.RDS")
-
-
-plot(test$samples[, "lambda.N"])
-plot(test$samples[, "N"])
-plot(test$samples[, "p0"])
-
-df_list <- list()
-for (i in 1:1500) {
-  df_list[[i]] <- data.frame(
-    x = as.numeric(unlist(test$samples2[, paste0("s[", i,", 1]")])),
-    y = as.numeric(unlist(test$samples2[, paste0("s[", i,", 2]")])),
-    z = as.numeric(unlist(test$samples2[, paste0("z[", i,"]")]))
-  )
-}
-
-
-bind_rows(df_list) %>% 
-  filter(z == 1) %>% 
-  ggplot() +
-  geom_bin2d(aes(x, y))
-
-data.frame(
-  x = as.numeric(unlist(test$samples2[, paste0("s[", i,", 1]")])),
-  y = as.numeric(unlist(test$samples2[, paste0("s[", i,", 2]")])),
-  z = as.numeric(unlist(test$samples2[, paste0("z[", i,"]")]))
-  ) %>% 
-  ggplot() +
-  geom_point(aes(x, y, col = z))
-
-
+fit_uscr_binom(iter = 1, prefix = "_", M = 3000, nchains = 3, nburnin = 10000,
+               niter = 50000, thin = 2, thin2 = 50)

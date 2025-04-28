@@ -90,10 +90,14 @@ calc_ESA(result_file = "uSCR_real/joint_masked_VPSsurface_Pois.RDS",
 #          distr = "NB", prefix_out = "joint_VPSsurface_uSCR")
 
 calc_ESA(result_file = "uSCR_real/joint_masked_VPSasCovar_Pois.RDS",
-         distr = "Pois", prefix_out = "joint_VPSasCovar_uSCR_wROV")
+         distr = "Pois", prefix_out = "joint_uSCR_wROV")
 
 calc_ESA(result_file = "uSCR_real/joint_masked_VPSasCovar_Pois_uninformativePrior.RDS",
          distr = "Pois", prefix_out = "joint_VPSasCovar_uninformativePrior_uSCR_wROV")
+
+
+calc_ESA(result_file = "uSCR_real/uSCR_real_Augustine_Binom_1.RDS",
+         distr = "Binom", prefix_out = "Binom_VPSasCovar_wROV")
 
 
 
