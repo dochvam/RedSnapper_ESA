@@ -472,17 +472,17 @@ capture <- clusterEvalQ(cl, {
 
 # Run simulations in parallel
 parLapply(cl, 10000 + 1:5, binomial_sim_per_Augustine, 
-          prefix = "_sim_", niter = 50000, M = 1500, 
+          prefix = "_sim_", niter = 50000, M = 750, 
           true_log_sigma = 5,
           nburnin = 20000, thin = 2, thin2 = 25, nchains = 2)
 
 parLapply(cl, 1000 + 1:5, binomial_sim_per_Augustine, 
-          prefix = "_sim_", niter = 50000, M = 1500, 
+          prefix = "_sim_", niter = 50000, M = 750, 
           true_log_sigma = 6.5,
           nburnin = 20000, thin = 2, thin2 = 25, nchains = 2)
 
 parLapply(cl, 100 + 1:5, binomial_sim_per_Augustine, 
-          prefix = "_sim_", niter = 50000, M = 1500, 
+          prefix = "_sim_", niter = 50000, M = 750, 
           true_log_sigma = 3.5,
           nburnin = 20000, thin = 2, thin2 = 25, nchains = 2)
 

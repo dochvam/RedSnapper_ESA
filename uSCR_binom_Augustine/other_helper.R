@@ -47,6 +47,7 @@ calcPctFishInROVbuffer <- nimbleFunction(run = function(phi = double(2),
                                                         rov_cell_xvec = double(1),
                                                         rov_cell_yvec = double(1),
                                                         n = integer(0)) {
+  phi <- phi / sum(phi)
   sum <- 0
   for (i in 1:n) {
     sum <- sum + weights[i] * phi[rov_cell_xvec[i], rov_cell_yvec[i]]
