@@ -19,9 +19,10 @@ source("uSCR_binom_Augustine/other_helper.R")
 nimbleOptions(determinePredictiveNodesInModel = FALSE)
 
 fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000, 
-                                       nchains = 1, nburnin = 1000, 
-                                       thin = 1, thin2 = 10) {
+                           nchains = 1, nburnin = 1000, thin = 1, thin2 = 10, 
+                           integration_type = "Full") {
   start_time <- Sys.time()
+  stopifnot(integration_type %in% c("Full", "Camera_only", "Camera_ROV", "Camera_Telemetry"))
   
   stopifnot(M %% 3 == 0)
   
@@ -89,7 +90,9 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
   
   resoln <- res(vps_intensity_ras)[1]
   
-  
+  # Get the informed prior for sigma
+  log_sigma_estimate <- read_csv("pipeline_NC/NC_results/log_sigma_estimate_NC.csv")
+
   #### Load both days of ROV data ####
   
   surface_to_buffer <- vps_intensity_ras
@@ -110,7 +113,7 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
     filter(camera == "A", time > 60 * 10, time <= 60 * 30) # Filter out descent/retrieval frames
   
   camera_detmtx <- camera_dat %>%
-    select(Station_ID, date, total) %>% 
+    dplyr::select(Station_ID, date, total) %>% 
     group_by(Station_ID, date) %>% 
     mutate(col = paste0("V", row_number())) %>% 
     pivot_wider(names_from = col, values_from = total)
@@ -119,7 +122,7 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
   y_mtx <- as.matrix(camera_detmtx[, obs_cols])
   
   camera_locations_corrected <- read_csv("intermediate/corrected_camera_stations.csv") %>% 
-    select(Station_ID, Date, Longitude, Latitude)
+    dplyr::select(Station_ID, Date, Longitude, Latitude)
   
   camera_locs <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx", sheet = "StationData") %>% 
     filter(`Camera (A or C)` == "A") %>%
@@ -222,6 +225,9 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
   
   constants <- list(M = M,
                     J = J,
+                    integration_type = integration_type,
+                    log_sigma_prior_mean = log_sigma_estimate$mean,
+                    log_sigma_prior_sd = log_sigma_estimate$sd,
                     current_dir = camera_locs$current_dir,
                     K1D = rep(K, J),
                     n.samples = n.samples,
@@ -292,7 +298,11 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
       p0[i] ~ dunif(0,1) #baseline detection probability on logit scale
     }
     
-    log_sigma ~ dnorm(3.435, sd = 1.138) # for test purposes, informative prior around true log sigma
+    if (integration_type == "Camera_Telemetry" || integration_type == "Full") {
+      log_sigma ~ dnorm(log_sigma_prior_mean, sd = log_sigma_prior_sd) # informative prior around true log sigma
+    } else {
+      log_sigma ~ dunif(0, 10)
+    }
     sigma <- exp(log_sigma)
     
     N ~ dpois(lambda.N) #realized abundance
@@ -329,14 +339,16 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
     capcounts[1:M] <- Getcapcounts(ID=ID[1:n.samples],M=M) #intermediate object
     n <- Getncap(capcounts=capcounts[1:M])
     
-    for (i in 1:nROV) {
-      # rbs and rbe are ROV buffer start/end indexes for ROV i
-      pctFishInROVbuffer[i] <- calcPctFishInROVbuffer(phi = phi[1:hm_nrow, 1:hm_ncol], 
-                                                      weights = rb_weights[rbs[i]:rbe[i]], 
-                                                      rov_cell_xvec = rov_cell_xvec[rbs[i]:rbe[i]],
-                                                      rov_cell_yvec = rov_cell_yvec[rbs[i]:rbe[i]],
-                                                      n = rbe[i] - rbs[i] + 1)
-      ROV_obs[i] ~ dpois(pctFishInROVbuffer[i] * lambda.N * (1/3))
+    if (integration_type == "Camera_ROV" || integration_type == "Full") {
+      for (i in 1:nROV) {
+        # rbs and rbe are ROV buffer start/end indexes for ROV i
+        pctFishInROVbuffer[i] <- calcPctFishInROVbuffer(phi = phi[1:hm_nrow, 1:hm_ncol], 
+                                                        weights = rb_weights[rbs[i]:rbe[i]], 
+                                                        rov_cell_xvec = rov_cell_xvec[rbs[i]:rbe[i]],
+                                                        rov_cell_yvec = rov_cell_yvec[rbs[i]:rbe[i]],
+                                                        n = rbe[i] - rbs[i] + 1)
+        ROV_obs[i] ~ dpois(pctFishInROVbuffer[i] * lambda.N * (1/3))
+      }
     }
   }) #model
   
@@ -430,12 +442,40 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
                samples = mcmc_samples$samples,
                samples2 = mcmc_samples$samples2,
                mcmc_time = difftime(mcmc_end_time, mcmc_start_time, units = "mins"),
-               total_time = difftime(end_time, start_time, units = "mins")
+               total_time = difftime(end_time, start_time, units = "mins"),
+               integration_type = integration_type,
+               iter = iter,
+               prefix = prefix,
+               system = "NC_ChickenRock"
   ),
-  paste0("uSCR_real/uSCR_real_Augustine_Binom", prefix, iter, ".RDS"))
+  paste0("pipeline_NC/NC_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, ".RDS"))
 }
 
 
 
-fit_uscr_binom(iter = 1, prefix = "_", M = 3000, nchains = 3, nburnin = 10000,
-               niter = 50000, thin = 2, thin2 = 50)
+type_vec <- c("Full", "Camera_only", "Camera_ROV", "Camera_Telemetry")
+
+cl <- makeCluster(4)
+
+capture <- clusterEvalQ(cl, {
+  library(tidyverse)
+  library(readxl)
+  library(terra)
+  library(parallel)
+  library(nimble)
+  library(coda)
+  library(MCMCvis)
+  
+  # Source file: Ben Augustine's helper fns
+  source("uSCR_binom_Augustine/augustine_helper.R")
+  
+  # Source file: Ben Goldstein's helper fns
+  source("uSCR_binom_Augustine/other_helper.R")
+})
+
+parLapply(cl, type_vec, fit_uscr_binom, iter = 2, prefix = "_Final_",
+          M = 3000, nchains = 3, nburnin = 50000,
+          niter = 100000, thin = 2, thin2 = 50)
+
+
+
