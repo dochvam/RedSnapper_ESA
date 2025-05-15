@@ -127,17 +127,16 @@ vps_stations %>%
   geom_point(aes(Longitude, Latitude)) +
   theme_minimal()
 
-plot_all_fish_heatmap <- vps_results %>% 
-  mutate(time_abs = as.numeric(difftime(Time, min(Time), units = "hour"))) %>% 
+plot_all_fish_heatmap <- vps_results %>%
+  mutate(time_abs = as.numeric(difftime(Time, min(Time), units = "hour"))) %>%
   ggplot(aes(Longitude, Latitude)) +
-  geom_bin_2d() +
+  geom_bin_2d(binwidth = ) +
   geom_point(data = vps_stations, col = "darkorange") +
   theme_minimal() +
-  scale_fill_viridis_c("Num. fixes", trans = "log", breaks = c(1, 20, 400, 8000), end = 0.8) +
+  scale_fill_viridis_c("Num. fixes", transform = "log",
+                       breaks = c(1, 20, 400, 8000), end = 0.8) +
   ggtitle("All fixes for all fish")
 
-ggsave(plot_all_fish_heatmap, filename = "plots/VPS_heatmap.jpg", 
-       width = 5, height = 4, dpi = 300)
 
 plot_data_per_fish <- vps_results %>% 
   count(FullId) %>% 
@@ -157,7 +156,7 @@ ggsave(plot_data_per_fish, filename = "plots/VPS_perfish.jpg",
 camera_counts <- camera_dat %>% 
   filter(!is.na(Station_ID)) %>% 
   group_by(Station_ID, date) %>% 
-  summarize(total = sum(total)) %>% 
+  summarize(max = max(total), total = sum(total)) %>% 
   left_join(stations, by = c("date" = "Date", "Station_ID")) %>%
   rename(Longitude = Start_Longitude, Latitude = Start_Latitude) %>% 
   mutate(current_dir = ifelse(grepl("toward", tolower(`Current Direction`)),
@@ -365,7 +364,7 @@ vpssurface_wcams <- ggplot() +
   geom_spatvector(data = camera_pts, col = "black", size = 2) +
   theme_minimal() +
   scale_fill_viridis_c(begin = 0.1, end = 0.8) + 
-  ggtitle("VPS intensity surface 30 m (w camera locs)")
+  ggtitle("VPS intensity surface 50 m (w camera locs)")
 ggsave("plots/VPS_surface.jpg", vpssurface_wcams, width = 6, height = 3)
 
 terra::values(vps_intensity_ras) <- cell_counts$n+1
@@ -374,22 +373,23 @@ vpssurface_log <- ggplot() +
   geom_spatraster(data = vps_intensity_ras) +
   # geom_spatvector(data = camera_pts, col = "black", size = 2) +
   theme_minimal() +
-  scale_fill_viridis_c(begin = 0.1, end = 0.8, trans = "log",
+  scale_fill_viridis_c("Num. fixes", begin = 0.1, end = 0.8, trans = "log",
                        breaks = c(1, 20, 400, 8000)) + 
-  ggtitle("VPS intensity surface 30 m (w camera locs), log-scale") +
+  ggtitle("VPS intensity surface 50 m, log-scale") +
   theme_void()
 ggsave("plots/VPS_surface_logscale.jpg", vpssurface_log, width = 6, height = 3)
 
 vpssurface_log <- ggplot() +
   geom_spatraster(data = vps_intensity_ras) +
-  geom_spatvector(data = camera_pts, col = "black", aes(size = total)) +
+  geom_spatvector(data = camera_pts, col = "black", aes(size = max)) +
   theme_minimal() +
-  scale_fill_viridis_c(begin = 0.1, end = 0.8, trans = "log",
+  scale_fill_viridis_c("Num. fixes", begin = 0.1, end = 0.8, trans = "log",
                        breaks = c(1, 20, 400, 8000)) + 
-  ggtitle("VPS intensity surface 30 m (w camera locs), log-scale") +
+  scale_size_continuous("Max cam. count") +
+  ggtitle("VPS intensity surface 50 m (w camera locs), log-scale") +
   facet_wrap(~date) + 
   theme_void()
-ggsave("plots/VPS_surface_wcam.jpg", vpssurface_log, width = 12, height = 3)
+ggsave("plots/VPS_surface_wcam.jpg", vpssurface_log, width = 12, height = 4)
 
 
 #### plot the hardbottom mask with ROV transects ####

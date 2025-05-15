@@ -3,7 +3,7 @@ library(nimble)
 library(gridExtra)
 
 results_files <- list.files("pipeline_NC/NC_results/", 
-                            pattern = "uSCR_real_.*.RDS",
+                            pattern = "uSCR_real_Augustine_Binom_LargerBuffer_.*.RDS",
                             full.names = TRUE)
 
 summary_df <- lapply(results_files, function(x) {
@@ -16,7 +16,12 @@ summary_df <- lapply(results_files, function(x) {
   rownames(summary) <- NULL
   summary
 }) %>% 
-  bind_rows()
+  bind_rows() %>% 
+  filter(integration_type != "Camera_only_noCovar")
+
+# log_sigma_estimate <- read_csv("pipeline_NC/NC_results/log_sigma_estimate_NC.csv")
+# log_sigma_mean <- 2.59
+# log_sigma_sd <- 0.803
 
 inttype_colors <- c(
   "Full" = "#1f78b4",
@@ -44,11 +49,13 @@ plot_p0 <- summary_df %>%
   ylab("95%CI") + theme(legend.position = "None")
 
 plot_sigma <- summary_df %>% 
-  filter(grepl("^log_sigma", param)) %>% 
+  filter(grepl("^sigma", param)) %>% 
   bind_rows(tibble(
-    integration_type = "Telem. prior", param = "log_sigma",
-    mean = 3.764, `2.5%` = 3.764 - 1.96 * 0.689, `97.5%` = 3.764 + 1.96 * 0.689 
-    )) %>% 
+    integration_type = "Telem. prior", param = "sigma",
+    mean = exp(log_sigma_mean), 
+    `2.5%` = exp(log_sigma_mean - 1.96 * log_sigma_sd),
+    `97.5%` = exp(log_sigma_mean + 1.96 * log_sigma_sd)
+  )) %>% 
   ggplot() +
   geom_pointrange(aes(param, mean, ymin = `2.5%`, ymax = `97.5%`, col = integration_type,
                       group = integration_type), position = position_dodge(width = 0.3)) +
@@ -93,6 +100,7 @@ for (i in 1:length(results_files)) {
 
 plot_ESA <- ESA_list %>% 
   bind_rows() %>% 
+  filter(integration_type != "Camera_only_noCovar") %>% 
   ggplot() +
   geom_pointrange(aes(current_dir, ESA_q50, ymin = ESA_q025, ymax = ESA_q975, col = integration_type,
                       group = integration_type), position = position_dodge(width = 0.3)) +
@@ -104,6 +112,7 @@ plot_ESA <- ESA_list %>%
 
 plot_ESA_compare <- ESA_list %>% 
   bind_rows() %>% 
+  filter(integration_type != "Camera_only_noCovar") %>% 
   bind_rows(
     data.frame(
       integration_type = "Zulian_etal", current_dir = c("Away", "Across", "Towards"),
@@ -161,17 +170,17 @@ plot_p0 <- summary_df %>%
 
 plot_sigma <- summary_df %>% 
   filter(integration_type == "Full") %>% 
-  filter(grepl("^log_sigma", param)) %>% 
+  filter(grepl("^sigma", param)) %>% 
   bind_rows(tibble(
-    integration_type = "Telem. prior", param = "log_sigma",
-    mean = 3.764, `2.5%` = 3.764 - 1.96 * 0.689, `97.5%` = 3.764 + 1.96 * 0.689 
+    integration_type = "Telem. prior", param = "sigma",
+    mean = exp(3.764), `2.5%` = exp(3.764 - 1.96 * 0.689), `97.5%` = exp(3.764 + 1.96 * 0.689)
   )) %>% 
   ggplot() +
   geom_pointrange(aes(param, mean, ymin = `2.5%`, ymax = `97.5%`, col = integration_type,
                       group = integration_type), position = position_dodge(width = 0.3)) +
   theme_bw() +
   scale_color_manual("Model", values = inttype_colors) +
-  coord_flip() + xlab("") + ggtitle("Log-scale displacement param.") +
+  coord_flip() + xlab("") + ggtitle("Displacement param.") +
   ylab("95%CI (m)") + theme(legend.position = "None")
 
 

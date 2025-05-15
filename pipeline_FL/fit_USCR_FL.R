@@ -18,26 +18,21 @@ source("uSCR_binom_Augustine/other_helper.R")
 
 nimbleOptions(determinePredictiveNodesInModel = FALSE)
 
-fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000, 
+fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000, 
                            nchains = 1, nburnin = 1000, thin = 1, thin2 = 10, 
-                           integration_type = NULL, type_vec = NULL) {
+                           spatial_type_vec, integration_type_vec) {
   start_time <- Sys.time()
   
-  if (is.null(integration_type) && !is.null(type_vec)) {
-    integration_type <- type_vec[iter]
-  } else if (is.null(integration_type) && is.null(type_vec)) {
-    stop("Must provide integration type")
-  } else if (!is.null(integration_type) && !is.null(type_vec)) {
-    stop(paste0("Can't supply both integration_type and type_vec. Pick one. ",
-                integration_type, type_vec))
-  }
+  spatial_type <- spatial_type_vec[iter]
+  integration_type <- integration_type_vec[iter]
   
-  stopifnot(integration_type %in% c("Full", "Camera_only", "Camera_ROV", 
-                                    "Camera_Telemetry", "Camera_only_noCovar"))
-  stopifnot(M %% 3 == 0)
-  set.seed(14432 + iter * 333) # set seed based on "iter" for reproducibility
+  stopifnot(spatial_type %in% c("HB_map", "VPS_map"))
+  stopifnot(integration_type %in% c("Full", "Camera_Telemetry", "Camera_ROV", "Camera_Only"))
   
-  source('pipeline_NC/prep_data_NC.R', local = TRUE)
+  stopifnot(M %% 2 == 0)
+  set.seed(14432 + iter * 222) # set seed based on "iter" for reproducibility
+  
+  source('pipeline_FL/prep_data_FL.R', local = TRUE)
   
   #### Model code, adapted from Ben Augustine ####
   model_code <- nimbleCode({
@@ -152,8 +147,6 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
                                                    calcNodes=calcNodes),silent = TRUE)
   
   
-  #"sSampler_wCovar", which is a RW block update for the x and y locs with no covariance,
-  #and only tuned for when z=1. When z=0, it draws from the distribution on s.
   for(i in 1:(M)){
     conf$addSampler(target = paste("s[",i,", 1:2]", sep=""),
                     type = 'sSampler_wCovar',
@@ -196,18 +189,15 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
                mcmc_time = difftime(mcmc_end_time, mcmc_start_time, units = "mins"),
                total_time = difftime(end_time, start_time, units = "mins"),
                integration_type = integration_type,
+               spatial_type = spatial_type,
                iter = iter,
                prefix = prefix,
-               system = "NC_ChickenRock"
+               system = "FL_TurtleMount"
   ),
-  paste0("pipeline_NC/NC_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, ".RDS"))
+  paste0("pipeline_FL/FL_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, "_", spatial_type, ".RDS"))
 }
 
-
-
-type_vec <- c("Full", "Camera_only", "Camera_ROV", "Camera_Telemetry", "Camera_only_noCovar")
-
-cl <- makeCluster(6)
+cl <- makeCluster(8)
 
 capture <- clusterEvalQ(cl, {
   library(tidyverse)
@@ -228,18 +218,19 @@ capture <- clusterEvalQ(cl, {
   
 })
 
-parLapply(cl, 
-          X = 1:6,
-          fun = fit_uscr_binom, 
-          type_vec = c(rep("Full", 3), rep("Camera_only", 3)),
-          prefix = "_20minSigma_ScalePrior_",
-          # M = 7500, nchains = 1, nburnin = 0,
-          # niter = 100, thin = 1, thin2 = 1)
-          M = 6000, nchains = 1, nburnin = 20000,
-          niter = 50000, thin = 2, thin2 = 50)
+spatial_type <- rep(c("HB_map", "VPS_map"), each = 2)
+integration_type <- rep(c("Full", "Camera_Telemetry"), 2)
+
+parLapply(cl, 1:12, fit_uscr_binom_FL, prefix = "_Final_",
+          spatial_type_vec = rep(spatial_type, 3), 
+          integration_type_vec = rep(integration_type, 3),
+          M = 4000, nchains = 1, nburnin = 10000,
+          niter = 40000, thin = 1, thin2 = 10)
 
 
-
-
+# fit_uscr_binom(iter = 100, prefix = "_Final_",
+#                M = 3000, nchains = 3, nburnin = 100000,
+#                niter = 200000, thin = 2, thin2 = 50,
+#                integration_type = "Full")
 
 

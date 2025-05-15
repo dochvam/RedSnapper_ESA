@@ -6,13 +6,16 @@ library(MASS)
 set.seed(152801)
 
 #### Load in camera data to retrieve target time interval ####
-stations <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx", sheet = "StationData") %>% 
-  mutate(Start_Time_GMT = as.numeric(difftime(Start_Time_GMT, as_datetime("1899-12-31 00:00:00"), units = "mins")))
 
-dates <- unique(stations$Date)
+camera_dat_all <- read_xlsx("Data/SouthAtlantic/SERFS_video_data_paired_sampling_2024_CTD.xlsx") %>% 
+  filter(`A Video Readable` == "Yes") %>% 
+  dplyr::select(date = Date, Start_Time_GMT) %>% 
+  mutate(time = as.numeric(difftime(Start_Time_GMT, as_datetime("1899-12-31 00:00:00"), units = "mins")))
+
+dates <- unique(camera_dat_all$date)
 t_intervals <- numeric(length(dates))
 for (i in 1:length(dates)) {
-  t_intervals[i] <- diff(range(stations$Start_Time_GMT[stations$Date == dates[i]]))
+  t_intervals[i] <- diff(range(camera_dat_all$time[camera_dat_all$date == dates[i]]))
 }
 t_interval <- max(t_intervals)
 
@@ -20,19 +23,12 @@ t_interval <- 20
 
 #### Analyzing fish paths ####
 
-VPS_folder <- "Data/SnapperMvmtAbundanceStudy/VPS_Data/VPS-ChickenRock-01-Results-20240202/results/animal/"
-VPS_files <- list.files(VPS_folder)
+fish_positions <- list.files("Data/SouthAtlantic/VPS_results/animal/",
+                                            full.names = TRUE) %>% 
+  lapply(read_csv, progress = F, col_types = list(Transmitter = col_character())) %>% 
+  bind_rows() %>% 
+  dplyr::select(FullId, Id, Time, Longitude, Latitude, Depth, HPE, RMSE)
 
-fish_files <- VPS_files[grepl("^12", VPS_files)]
-
-fish_fate <- read_xlsx("Data/SnapperMvmtAbundanceStudy/VPS_Data/Fate_assignments_from_discard_paper_vps 2023.xlsx")
-fish_to_drop <- fish_fate$`Tag number`[fish_fate$`subsequent assignments based on velocity and depth data` == "Discard mortality"]
-dead_fish_files <- paste0(fish_to_drop, ".csv")
-fish_files <- fish_files[!fish_files %in% dead_fish_files]
-
-fish_positions <- lapply(file.path(VPS_folder, fish_files),
-                         read_csv) %>% 
-  bind_rows()
 
 fish_pts <- vect(fish_positions, geom = c("Longitude", "Latitude"),
                  crs = "+proj=longlat") %>% 
@@ -118,19 +114,19 @@ for (i in 1:nrow(all_IDs)) {
 }
 
 
-write_csv(result_df, "pipeline_NC/NC_results/all_intervals_sigma.csv")
+write_csv(result_df, "pipeline_FL/FL_results/all_intervals_sigma.csv")
 
-result_df <- read_csv("pipeline_NC/NC_results/all_intervals_sigma.csv") %>% 
+result_df <- read_csv("pipeline_FL/FL_results/all_intervals_sigma.csv") %>% 
   filter(!is.na(var))
 
 log_sigma_summary <- result_df %>% 
   summarize(mean = mean(log(sqrt(var))),
-            median = median(log(sqrt(var))),
+            med = median(log(sqrt(var))),
             sd = sd(log(sqrt(var))),
             q25 = quantile(log(sqrt(var)), 0.25),
             q75 = quantile(log(sqrt(var)), 0.75))
 
-qqnorm(scale(log(sqrt(result_df$var))))
-abline(0,1)
+write_csv(log_sigma_summary, "pipeline_FL/FL_results/log_sigma_estimate_FL.csv")
 
-write_csv(log_sigma_summary, "pipeline_NC/NC_results/log_sigma_estimate_NC.csv")
+qqnorm(scale(log(sqrt(result_df$var))))
+abline(0, 1)

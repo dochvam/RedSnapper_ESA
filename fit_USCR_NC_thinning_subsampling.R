@@ -1,7 +1,3 @@
-### In this script---use Ben Augustine's code to implement the binomial USCR.
-###    Use a simulation framework, but try to add our real locations and
-###    also add the VPS surface.
-
 library(tidyverse)
 library(readxl)
 library(terra)
@@ -18,31 +14,22 @@ source("uSCR_binom_Augustine/other_helper.R")
 
 nimbleOptions(determinePredictiveNodesInModel = FALSE)
 
-fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000, 
-                           nchains = 1, nburnin = 1000, thin = 1, thin2 = 10, 
-                           integration_type = NULL, type_vec = NULL) {
+fit_uscr_binom_oneday <- function(iter, specs_df, prefix, M = 500, niter = 10000, 
+                           nchains = 1, nburnin = 1000, thin = 1, thin2 = 10) {
   start_time <- Sys.time()
+
+  integration_type <- specs_df$integration_type[iter]
+  target_date <- specs_df$date[iter]
+  data_thin_interval <- specs_df$data_thin_interval[iter]
   
-  if (is.null(integration_type) && !is.null(type_vec)) {
-    integration_type <- type_vec[iter]
-  } else if (is.null(integration_type) && is.null(type_vec)) {
-    stop("Must provide integration type")
-  } else if (!is.null(integration_type) && !is.null(type_vec)) {
-    stop(paste0("Can't supply both integration_type and type_vec. Pick one. ",
-                integration_type, type_vec))
-  }
-  
-  stopifnot(integration_type %in% c("Full", "Camera_only", "Camera_ROV", 
-                                    "Camera_Telemetry", "Camera_only_noCovar"))
-  stopifnot(M %% 3 == 0)
-  set.seed(14432 + iter * 333) # set seed based on "iter" for reproducibility
+  set.seed(999888777 + iter * 333) # set seed based on "iter" for reproducibility
   
   source('pipeline_NC/prep_data_NC.R', local = TRUE)
   
   #### Model code, adapted from Ben Augustine ####
   model_code <- nimbleCode({
     # priors
-    lambda.N ~ dgamma(1e-6, 1e-6) #expected abundance
+    lambda.N ~ dunif(0, M*50) #expected abundance
     for (i in 1:3) {
       p0[i] ~ dunif(0,1) #baseline detection probability on logit scale
     }
@@ -100,7 +87,7 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
                                                         rov_cell_xvec = rov_cell_xvec[rbs[i]:rbe[i]],
                                                         rov_cell_yvec = rov_cell_yvec[rbs[i]:rbe[i]],
                                                         n = rbe[i] - rbs[i] + 1)
-        ROV_obs[i] ~ dpois(pctFishInROVbuffer[i] * lambda.N * (1/3))
+        ROV_obs[i] ~ dpois(pctFishInROVbuffer[i] * lambda.N)
       }
     }
   }) #model
@@ -198,16 +185,44 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
                integration_type = integration_type,
                iter = iter,
                prefix = prefix,
+               specs_df_row = specs_df[iter, ],
                system = "NC_ChickenRock"
   ),
-  paste0("pipeline_NC/NC_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, ".RDS"))
+  paste0("pipeline_NC/NC_results/oneday/uSCR_OneDay_Binom", prefix, iter, "_", integration_type, ".RDS"))
 }
 
 
 
 type_vec <- c("Full", "Camera_only", "Camera_ROV", "Camera_Telemetry", "Camera_only_noCovar")
+# 
+# fit_uscr_binom(iter = 111, prefix = "_LargerBuffer_",
+#                M = 3000, nchains = 3, nburnin = 10000,
+#                niter = 30000, thin = 2, thin2 = 50,
+#                integration_type = "Full")
 
-cl <- makeCluster(6)
+
+
+
+# Fit models for one day at a time
+# Fit models for diff. levels of thinning
+# Days 2-3, skip ROV models
+# 
+
+
+specs_df <- expand.grid(
+  date = 1:3,
+  integration_type = c("Full", "Camera_only", "Camera_ROV", "Camera_Telemetry"),
+  data_thin_interval = c(1, 5, 10)
+) %>% 
+  as.data.frame() %>% 
+  filter(date == 1 | integration_type %in% c("Camera_only", "Camera_Telemetry")) %>% 
+  mutate(ID = row_number())
+
+
+
+
+
+cl <- makeCluster(8)
 
 capture <- clusterEvalQ(cl, {
   library(tidyverse)
@@ -228,18 +243,145 @@ capture <- clusterEvalQ(cl, {
   
 })
 
-parLapply(cl, 
-          X = 1:6,
-          fun = fit_uscr_binom, 
-          type_vec = c(rep("Full", 3), rep("Camera_only", 3)),
-          prefix = "_20minSigma_ScalePrior_",
-          # M = 7500, nchains = 1, nburnin = 0,
-          # niter = 100, thin = 1, thin2 = 1)
-          M = 6000, nchains = 1, nburnin = 20000,
-          niter = 50000, thin = 2, thin2 = 50)
+parLapply(cl, which(specs_df$date == 1 & specs_df$data_thin_interval == 5), fit_uscr_binom_oneday, 
+          prefix = "_TestChangingBaseline_", specs_df = specs_df,
+          M = 1000, nchains = 3, nburnin = 20000,
+          niter = 100000, thin = 2, thin2 = 50)
+# parLapply(cl, 1:nrow(specs_df), fit_uscr_binom_oneday, 
+#           prefix = "_TestChangingBaseline_", specs_df = specs_df,
+#           M = 1000, nchains = 3, nburnin = 20000,
+#           niter = 100000, thin = 2, thin2 = 50)
 
 
 
+
+results_files <- list.files("pipeline_NC/NC_results/oneday/",
+                            full.names = TRUE)
+
+summary_df <- results_files %>% 
+  lapply(function(x) {
+    temp <- readRDS(x)
+    df <- temp$summary %>% 
+      mutate(date = temp$specs_df_row$date,
+             thin = temp$specs_df_row$data_thin_interval,
+             integration_type = temp$specs_df_row$integration_type,
+             ID = temp$specs_df_row$ID
+             )
+    df$param <- rownames(df)
+    rownames(df) <- NULL
+    df
+  }) %>% 
+  bind_rows() 
+
+
+#### Plot of log(sigma) ####
+log_sigma_estimate <- read_csv("pipeline_NC/NC_results/log_sigma_estimate_NC.csv")
+
+summary_df %>% 
+  filter(param == "log_sigma") %>% 
+  bind_rows(tibble(
+    integration_type = "Telem. prior",
+    mean = log_sigma_estimate$mean,
+    `2.5%` = log_sigma_estimate$mean - 1.96 * log_sigma_estimate$sd,
+    `97.5%` = log_sigma_estimate$mean + 1.96 * log_sigma_estimate$sd,
+    ID = 0,
+    date = 1:3,
+    thin = 1
+  )) %>% 
+  ggplot() + 
+  geom_pointrange(aes(ID, mean, ymin = `2.5%`, ymax = `97.5%`,
+                      col = integration_type, 
+                      shape = factor(paste0("Thin: ", thin, " frame(s)"),
+                                     levels = unique(paste0("Thin: ", sort(thin), " frame(s)"))))) +
+  facet_wrap(~paste0("Sampling day ", date), ncol = 1) +
+  scale_shape_discrete("") +
+  coord_flip() +
+  theme_bw() + xlab("") +
+  theme(axis.ticks = element_blank(), axis.text.y = element_blank(),
+        panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank()) +
+  ggtitle("log(sigma)")
+
+
+#### Plot of N ####
+log_sigma_estimate <- read_csv("pipeline_NC/NC_results/log_sigma_estimate_NC.csv")
+
+summary_df %>% 
+  filter(param == "N") %>% 
+  ggplot() + 
+  geom_pointrange(aes(ID, mean, ymin = `2.5%`, ymax = `97.5%`,
+                      col = integration_type, 
+                      shape = factor(paste0("Thin: ", thin, " frame(s)"),
+                                     levels = unique(paste0("Thin: ", sort(thin), " frame(s)"))))) +
+  facet_wrap(~paste0("Sampling day ", date), ncol = 1) +
+  scale_shape_discrete("") +
+  coord_flip() +
+  theme_bw() + xlab("") +
+  theme(axis.ticks = element_blank(), axis.text.y = element_blank(),
+        panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank()) +
+  ggtitle("N")
+
+summary_df %>% 
+  filter(param == "spatial_beta") %>% 
+  ggplot() + 
+  geom_pointrange(aes(ID, mean, ymin = `2.5%`, ymax = `97.5%`,
+                      col = integration_type, 
+                      shape = factor(paste0("Thin: ", thin, " frame(s)"),
+                                     levels = unique(paste0("Thin: ", sort(thin), " frame(s)"))))) +
+  facet_wrap(~paste0("Sampling day ", date), ncol = 1) +
+  scale_shape_discrete("") +
+  coord_flip() +
+  theme_bw() + xlab("") +
+  theme(axis.ticks = element_blank(), axis.text.y = element_blank(),
+        panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank()) +
+  ggtitle("Spatial covar effect")
+
+
+summary_df %>% 
+  filter(param == "spatial_beta") %>% 
+  ggplot() + 
+  geom_pointrange(aes(ID, mean, ymin = `2.5%`, ymax = `97.5%`,
+                      col = integration_type, 
+                      shape = factor(paste0("Thin: ", thin, " frame(s)"),
+                                     levels = unique(paste0("Thin: ", sort(thin), " frame(s)"))))) +
+  facet_wrap(~paste0("Sampling day ", date), ncol = 1) +
+  scale_shape_discrete("") +
+  coord_flip() +
+  theme_bw() + xlab("") +
+  theme(axis.ticks = element_blank(), axis.text.y = element_blank(),
+        panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank()) +
+  ggtitle("Spatial covar effect")
+
+
+#### Plot of ESA ####
+
+source("pipeline_NC/ESA_helper.R")
+ESA_list <- list() 
+for (i in 1:length(results_files)) {
+  temp <- readRDS(results_files[i])
+  ESA_list[[i]] <- calc_ESA(temp, "Binom") %>% 
+    mutate(date = temp$specs_df_row$date,
+           thin = temp$specs_df_row$data_thin_interval,
+           integration_type = temp$specs_df_row$integration_type,
+           ID = temp$specs_df_row$ID)
+}
+
+
+ESA_list %>% 
+  bind_rows() %>% 
+  ggplot() + 
+  geom_pointrange(
+    aes(ID, ESA_q50, ymin = ESA_q025, ymax = ESA_q975,
+                      col = integration_type, 
+                      shape = factor(paste0("Thin: ", thin, " frame(s)"),
+                                     levels = unique(paste0("Thin: ", sort(thin), " frame(s)"))))) +
+  facet_grid(paste0("Sampling day ", date)~current_dir) +
+  scale_shape_discrete("") +
+  coord_flip() +
+  theme_bw() + xlab("") +
+  scale_y_continuous(transform = "log", breaks = 100*2^(2 * 1:5)) +
+  theme(axis.ticks = element_blank(), axis.text.y = element_blank(),
+        panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank()) +
+  ggtitle("ESA")
 
 
 

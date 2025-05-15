@@ -20,18 +20,8 @@ nimbleOptions(determinePredictiveNodesInModel = FALSE)
 
 fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000, 
                            nchains = 1, nburnin = 1000, thin = 1, thin2 = 10, 
-                           integration_type = NULL, type_vec = NULL) {
+                           integration_type = "Full") {
   start_time <- Sys.time()
-  
-  if (is.null(integration_type) && !is.null(type_vec)) {
-    integration_type <- type_vec[iter]
-  } else if (is.null(integration_type) && is.null(type_vec)) {
-    stop("Must provide integration type")
-  } else if (!is.null(integration_type) && !is.null(type_vec)) {
-    stop(paste0("Can't supply both integration_type and type_vec. Pick one. ",
-                integration_type, type_vec))
-  }
-  
   stopifnot(integration_type %in% c("Full", "Camera_only", "Camera_ROV", 
                                     "Camera_Telemetry", "Camera_only_noCovar"))
   stopifnot(M %% 3 == 0)
@@ -39,10 +29,84 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
   
   source('pipeline_NC/prep_data_NC.R', local = TRUE)
   
+  
+  #### Randomly generate some counts ####
+  y_mtx[] <- rpois(prod(dim(y_mtx)), mean(y_mtx))
+  
+  n.samples <- sum(y_mtx)
+  
+  this.j <- this.k <- rep(NA,n.samples)
+  idx <- 1
+  for(j in 1:J){ #then traps
+    for(k in 1:K){ #then occasions
+      if(y_mtx[j,k]>0){ #is there at least one sample here?
+        for(l in 1:y_mtx[j,k]){ #then samples
+          this.j[idx] <- j
+          this.k[idx] <- k
+          idx <- idx+1
+        }
+      }
+    }
+  }
+  constants <- list(M = M,
+                    J = J,
+                    integration_type = integration_type,
+                    log_sigma_prior_mean = log_sigma_estimate$mean,
+                    log_sigma_prior_sd = log_sigma_estimate$sd,
+                    current_dir = camera_locs$current_dir,
+                    K1D = rep(K, J),
+                    n.samples = n.samples,
+                    xlim = xlim,
+                    ylim = ylim,
+                    datevec = X_datevec,
+                    idate = rep(1:3, each = M/3),
+                    hm = vps_mtx,
+                    ones_mtx = ones_mtx,
+                    hm_nrow = nrow(vps_mtx),
+                    hm_ncol = ncol(vps_mtx),
+                    resoln = res(vps_intensity_ras)[1],
+                    nROV = nrow(rov_dat),
+                    rb_weights = intersections_df$weight,
+                    rov_cell_xvec = intersections_df$x_ind,
+                    rov_cell_yvec = intersections_df$y_ind,
+                    rbe = rbe, rbs = rbs)
+  
+  y.true.init <- initialize_ytrue(M,
+                                  z_init, 
+                                  s_init, 
+                                  this.j = this.j,
+                                  this.k = this.k,
+                                  X_mtx = X_mtx,
+                                  current_dir = camera_locs$current_dir,
+                                  X_datevec = X_datevec, 
+                                  idate = constants$idate,
+                                  n.samples = n.samples,
+                                  sigma_init = sigma_init, p0_init = p0_init, K = K)
+  
+  Niminits <- list(z = z_init,
+                   N = sum(z_init), #must initialize N to be the sum of z init
+                   lambda.N=sum(z_init), #initializing lambda.N to be consistent with N.init
+                   s = s_init,
+                   ID = y.true.init$ID,
+                   capcounts = rowSums(y.true.init$ytrue2D),
+                   y.true = y.true.init$ytrue2D,
+                   p0 = p0_init, 
+                   sigma = sigma_init,
+                   log_sigma = log_sigma_init,
+                   spatial_beta = 0.3)
+  
+  
+  Nimdata <- list(y.true=matrix(NA,nrow=(M),ncol=J),
+                  ROV_obs = rov_dat$count,
+                  ID = rep(NA, n.samples),
+                  z = rep(NA, M),
+                  X = as.matrix(X_mtx),
+                  capcounts=rep(NA, M))
+  
   #### Model code, adapted from Ben Augustine ####
   model_code <- nimbleCode({
     # priors
-    lambda.N ~ dgamma(1e-6, 1e-6) #expected abundance
+    lambda.N ~ dunif(0,M*50) #expected abundance
     for (i in 1:3) {
       p0[i] ~ dunif(0,1) #baseline detection probability on logit scale
     }
@@ -152,14 +216,15 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
                                                    calcNodes=calcNodes),silent = TRUE)
   
   
-  #"sSampler_wCovar", which is a RW block update for the x and y locs with no covariance,
-  #and only tuned for when z=1. When z=0, it draws from the distribution on s.
+  #"sSampler", which is a RW block update for the x and y locs with no covariance,
+  #and only tuned for when z=1. When z=0, it draws from the prior, assumed to be uniform. 
+  # conf$removeSampler(paste("s[1:",M,", 1:2]", sep=""))
+  # BRG note: atm we let the sampler propose draws from a uniform prior even though
+  #  the actual distribution on s is not uniform. I don't think this is an issue--
+  #  just inefficient--but I wouldn't mind a santy check on this
   for(i in 1:(M)){
     conf$addSampler(target = paste("s[",i,", 1:2]", sep=""),
-                    type = 'sSampler_wCovar',
-                    control=list(i=i, xlim=xlim, ylim=ylim, scale=50,
-                                 resoln = constants$resoln),
-                    silent = TRUE)
+                    type = 'sSampler',control=list(i=i,xlim=xlim,ylim=ylim,scale=50),silent = TRUE)
     #scale parameter here is just the starting scale. It will be tuned.
   }
   
@@ -200,46 +265,15 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
                prefix = prefix,
                system = "NC_ChickenRock"
   ),
-  paste0("pipeline_NC/NC_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, ".RDS"))
+  paste0("intermediate/uSCR_fake_Augustine_Binom", prefix, iter, "_", integration_type, ".RDS"))
 }
 
 
-
-type_vec <- c("Full", "Camera_only", "Camera_ROV", "Camera_Telemetry", "Camera_only_noCovar")
-
-cl <- makeCluster(6)
-
-capture <- clusterEvalQ(cl, {
-  library(tidyverse)
-  library(readxl)
-  library(terra)
-  library(parallel)
-  library(nimble)
-  library(coda)
-  library(MCMCvis)
-  
-  # Source file: Ben Augustine's helper fns
-  source("uSCR_binom_Augustine/augustine_helper.R")
-  
-  # Source file: Ben Goldstein's helper fns
-  source("uSCR_binom_Augustine/other_helper.R")
-  
-  nimbleOptions(determinePredictiveNodesInModel = FALSE)
-  
-})
-
-parLapply(cl, 
-          X = 1:6,
-          fun = fit_uscr_binom, 
-          type_vec = c(rep("Full", 3), rep("Camera_only", 3)),
-          prefix = "_20minSigma_ScalePrior_",
-          # M = 7500, nchains = 1, nburnin = 0,
-          # niter = 100, thin = 1, thin2 = 1)
-          M = 6000, nchains = 1, nburnin = 20000,
-          niter = 50000, thin = 2, thin2 = 50)
+fit_uscr_binom(iter = 100, prefix = "_TestRandomData_",
+               M = 3000, nchains = 3, nburnin = 10000,
+               niter = 20000, thin = 2, thin2 = 50,
+               integration_type = "Camera_only_noCovar")
 
 
-
-
-
-
+result <- readRDS("intermediate/uSCR_fake_Augustine_Binom_TestRandomData_100_Camera_only_noCovar.RDS")
+View(result$summary)

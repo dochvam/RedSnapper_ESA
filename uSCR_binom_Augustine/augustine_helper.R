@@ -279,7 +279,6 @@ zSampler <- nimbleFunction(
   methods = list( reset = function () {} )
 )
 
-
 sSampler <- nimbleFunction(
   # name = 'sampler_RW',
   contains = sampler_BASE,
@@ -417,7 +416,6 @@ sSampler <- nimbleFunction(
     }
   )
 )
-
 
 
 e2dist <- function (x, y){

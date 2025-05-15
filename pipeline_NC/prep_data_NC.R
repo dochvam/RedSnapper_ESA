@@ -1,4 +1,5 @@
 
+
 #### Process the real data ####
 # First, we process all the real data. This allows us to define simulation data
 # dimensions, use the real VPS data (as spatial covar.) and camera locations,
@@ -24,32 +25,40 @@ fish_pts <- vect(fish_positions, geom = c("Longitude", "Latitude"),
   project(crs(hb_raw))
 
 # Define a spatial extent encompassing all VPS locs, snapped to a 50 m grid
-e <- ext(fish_pts)
-xmin(e) <- floor(xmin(e) / 50) * 50
-xmax(e) <- ceiling(xmax(e) / 50) * 50
-ymin(e) <- floor(ymin(e) / 50) * 50
-ymax(e) <- ceiling(ymax(e) / 50) * 50
+grid_buffer <- 300
+grid_resoln <- 50
 
-template_grid <- rast(e, res = 50)
+e <- ext(fish_pts)
+xmin(e) <- floor((xmin(e) - grid_buffer) / grid_resoln) * grid_resoln
+xmax(e) <- ceiling((xmax(e) + grid_buffer) / grid_resoln) * grid_resoln
+ymin(e) <- floor((ymin(e) - grid_buffer) / grid_resoln) * grid_resoln
+ymax(e) <- ceiling((ymax(e) + grid_buffer) / grid_resoln) * grid_resoln
+
+template_grid <- rast(e, res = grid_resoln)
 crs(template_grid) <- crs(fish_pts)
 terra::values(template_grid) <- 1:ncell(template_grid)
+
+
+
+
+vps_baseline <- 0.01
 
 # Count the number of VPS fixes in each grid cell, then get a total proportion
 cell_counts <- count(extract(template_grid, fish_pts), lyr.1)
 cell_counts <- left_join(data.frame(lyr.1 = 1:ncell(template_grid)), cell_counts)
 cell_counts$n[is.na(cell_counts$n)] <- 0
 # Add 1 obs. to every cell so we don't make it impossible for a fish to be somewhere
-cell_counts$prob <- (cell_counts$n+1) / sum(cell_counts$n+1)
+cell_counts$prob <- (cell_counts$n+vps_baseline) / sum(cell_counts$n+vps_baseline)
 
 # Formatting stuff
-vps_intensity_ras <- template_grid
-terra::values(vps_intensity_ras) <- cell_counts$prob
-plot(vps_intensity_ras)
+covariate_ras <- template_grid
+terra::values(covariate_ras) <- cell_counts$prob
+plot(covariate_ras)
 
-vps_mtx <- t(as.matrix(vps_intensity_ras, wide = T))
-vps_mtx <- vps_mtx[, ncol(vps_mtx):1]
+covariate_mtx <- t(as.matrix(covariate_ras, wide = T))
+covariate_mtx <- covariate_mtx[, ncol(covariate_mtx):1]
 
-grid_bbox <- ext(vps_intensity_ras)
+grid_bbox <- ext(covariate_ras)
 grid_bbox <- as.numeric(c(grid_bbox[1], grid_bbox[2], grid_bbox[3], grid_bbox[4]))
 
 x_offset <- mean(grid_bbox[1:2])
@@ -58,14 +67,14 @@ y_offset <- mean(grid_bbox[3:4])
 grid_bbox[1:2] <- grid_bbox[1:2] - x_offset
 grid_bbox[3:4] <- grid_bbox[3:4] - y_offset
 
-resoln <- res(vps_intensity_ras)[1]
+resoln <- res(covariate_ras)[1]
 
 # Get the informed prior for sigma
 log_sigma_estimate <- read_csv("pipeline_NC/NC_results/log_sigma_estimate_NC.csv")
 
 #### Load both days of ROV data ####
 
-surface_to_buffer <- vps_intensity_ras
+surface_to_buffer <- covariate_ras
 source("uSCR_real/process_ROV_buffers.R")
 
 processed_buffers_result <- process_ROV_buffers(buffer_size = 4.9, surface_to_buffer = surface_to_buffer)
@@ -76,11 +85,13 @@ rov_dat <- processed_buffers_result$rov_dat
 
 #### Load and format the camera data ####
 
-# Get the real camera locations and deployment times for use in the simulation
+# Get the real camera locations and deployment times
 
-camera_dat <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx") %>% 
-  mutate(time = as.numeric(difftime(time, as_datetime("1899-12-31 00:00:00"), units = "sec"))) %>% 
-  filter(camera == "A", time > 60 * 10, time <= 60 * 30) # Filter out descent/retrieval frames
+suppressWarnings(
+  camera_dat <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx") %>% 
+    mutate(time = as.numeric(difftime(time, as_datetime("1899-12-31 00:00:00"), units = "sec"))) %>% 
+    filter(camera == "A", time > 60 * 10, time <= 60 * 30) # Filter out descent/retrieval frames
+)
 
 camera_detmtx <- camera_dat %>%
   dplyr::select(Station_ID, date, total) %>% 
@@ -88,22 +99,36 @@ camera_detmtx <- camera_dat %>%
   mutate(col = paste0("V", row_number())) %>% 
   pivot_wider(names_from = col, values_from = total)
 obs_cols <- colnames(camera_detmtx)[3:ncol(camera_detmtx)]
+camera_detmtx$date_index <- as.numeric(as.factor(camera_detmtx$date))
 
-y_mtx <- as.matrix(camera_detmtx[, obs_cols])
+if (exists("data_thin_interval")) {
+  obs_cols <- obs_cols[1 + 0:(length(obs_cols)/data_thin_interval-1) * data_thin_interval]
+}
 
 camera_locations_corrected <- read_csv("intermediate/corrected_camera_stations.csv") %>% 
   dplyr::select(Station_ID, Date, Longitude, Latitude)
 
-camera_locs <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx", sheet = "StationData") %>% 
-  filter(`Camera (A or C)` == "A") %>%
-  dplyr::select(Station_ID, Date, Time = Start_Time_GMT, 
-                current_dir = `Current Direction`) %>% 
-  left_join(camera_locations_corrected, by = c("Station_ID", "Date"))
+suppressWarnings(
+  camera_locs <- read_xlsx("Data/SnapperMvmtAbundanceStudy/CountData/cameratraps/RS_2023_full_reads_all_three_cameratrap_dates.xlsx", sheet = "StationData") %>% 
+    filter(`Camera (A or C)` == "A") %>%
+    dplyr::select(Station_ID, Date, Time = Start_Time_GMT, 
+                  current_dir = `Current Direction`) %>% 
+    left_join(camera_locations_corrected, by = c("Station_ID", "Date"))
+)
 
 camera_locs$current_dir <- ifelse(
   grepl("towards", tolower(camera_locs$current_dir)), 1, 
   ifelse(grepl("away", tolower(camera_locs$current_dir)), 2, 3)
 )
+camera_locs$date_index <- as.numeric(as.factor(camera_locs$Date))
+
+if (exists("target_date")) {
+  camera_detmtx <- camera_detmtx %>% filter(date_index == target_date)
+  camera_locs <- camera_locs %>% filter(date_index == target_date)
+}
+
+
+y_mtx <- as.matrix(camera_detmtx[, obs_cols])
 
 # Make sure order of camera locs matches order of detection history
 stopifnot(all(camera_locs$Station_ID == camera_detmtx$Station_ID) &
@@ -130,29 +155,36 @@ Dates <- unique(camera_locs$Date)
 #### Data reformatting for model ####
 
 
-# Make a 3D array of camera coords  
-mtx_nrow <- max(table(camera_locs$Date))
-ncam_vec <- numeric(3)
-X_array <- array(dim = c(mtx_nrow, 3, 2))
-for (i in 1:3) {
-  ncam_vec[i] <- sum(camera_locs$Date == Dates[i])
-  X_array[1:ncam_vec[i], i, 1] <- X$x[camera_locs$Date == Dates[i]]
-  X_array[1:ncam_vec[i], i, 2] <- X$y[camera_locs$Date == Dates[i]]
+if (!exists("target_date")) {
+  # Make a 3D array of camera coords  
+  mtx_nrow <- max(table(camera_locs$Date))
+  ncam_vec <- numeric(3)
+  X_array <- array(dim = c(mtx_nrow, 3, 2))
+  for (i in 1:3) {
+    ncam_vec[i] <- sum(camera_locs$Date == Dates[i])
+    X_array[1:ncam_vec[i], i, 1] <- X$x[camera_locs$Date == Dates[i]]
+    X_array[1:ncam_vec[i], i, 2] <- X$y[camera_locs$Date == Dates[i]]
+  }
+  # Convert to a 2d matrix
+  X_mtx <- rbind(X_array[,1,], X_array[,2,], X_array[1:14,3,])
+  X_datevec <- c(rep(1, 18), rep(2, 18), rep(3, 14))
+  stopifnot(nrow(X_mtx) == length(X_datevec))
+  
+  idate <- rep(1:3, each = M/3)
+} else {
+  X_mtx <- X
+  X_datevec <- rep(1, nrow(X_mtx))
+  
+  idate <- rep(1, M)
 }
-# Convert to a 2d matrix
-X_mtx <- rbind(X_array[,1,], X_array[,2,], X_array[1:14,3,])
-X_datevec <- c(rep(1, 18), rep(2, 18), rep(3, 14))
-stopifnot(nrow(X_mtx) == length(X_datevec))
 
-#### Simulate observed counts in an R function ####
+#### Get observed counts ####
 
-# Simulate camera data #
 xlim <- grid_bbox[1:2]
 ylim <- grid_bbox[3:4]
 J <- nrow(X_mtx)
 
 K <- ncol(y_mtx)
-
 
 n.samples <- sum(y_mtx)
 
@@ -175,7 +207,7 @@ for(j in 1:J){ #then traps
 #   X_mtx = X_mtx, X_datevec = X_datevec,
 #   J = J, xlim = xlim, ylim = ylim, K = K,
 #   resoln = resoln,
-#   habitatMask = vps_mtx,
+#   habitatMask = covariate_mtx,
 #   spatial_beta = true_spatial_beta
 # )
 
@@ -188,10 +220,10 @@ for(j in 1:J){ #then traps
 #                       rov_cell_yvec = intersections_df$y_ind,
 #                       rbe = rbe, rbs = rbs, 
 #                       spatial_beta = true_spatial_beta, 
-#                       habitatMask = vps_mtx,
+#                       habitatMask = covariate_mtx,
 #                       sim.out = sim.out)
 
-ones_mtx <- vps_mtx
+ones_mtx <- covariate_mtx
 ones_mtx[] <- 1
  
 #### Make NIMBLE model input lists ####
@@ -207,12 +239,12 @@ constants <- list(M = M,
                   xlim = xlim,
                   ylim = ylim,
                   datevec = X_datevec,
-                  idate = rep(1:3, each = M/3),
-                  hm = vps_mtx,
+                  idate = idate,
+                  hm = covariate_mtx,
                   ones_mtx = ones_mtx,
-                  hm_nrow = nrow(vps_mtx),
-                  hm_ncol = ncol(vps_mtx),
-                  resoln = res(vps_intensity_ras)[1],
+                  hm_nrow = nrow(covariate_mtx),
+                  hm_ncol = ncol(covariate_mtx),
+                  resoln = res(covariate_ras)[1],
                   nROV = nrow(rov_dat),
                   rb_weights = intersections_df$weight,
                   rov_cell_xvec = intersections_df$x_ind,
@@ -226,7 +258,7 @@ s_init <- initialize_s(
   xlim = xlim,
   ylim = ylim,
   resoln = resoln,
-  habitatMask = vps_mtx,
+  habitatMask = covariate_mtx,
   spatial_beta = 0.5
 )
 sigma_init <- exp(4.5)
