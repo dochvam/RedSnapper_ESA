@@ -37,17 +37,19 @@ crs(template_grid) <- crs(fish_pts)
 terra::values(template_grid) <- 1:ncell(template_grid)
 
 
+vps_baseline <- 0.01
+
 if (spatial_type == "VPS_map") {
   # Count the number of VPS fixes in each grid cell, then get a total proportion
   cell_counts <- count(extract(template_grid, fish_pts), lyr.1)
   cell_counts <- left_join(data.frame(lyr.1 = 1:ncell(template_grid)), cell_counts)
   cell_counts$n[is.na(cell_counts$n)] <- 0
   # Add 1 obs. to every cell so we don't make it impossible for a fish to be somewhere
-  cell_counts$prob <- (cell_counts$n+1) / sum(cell_counts$n+1)
+  cell_counts$prob <- (cell_counts$n+vps_baseline) / sum(cell_counts$n+vps_baseline)
   
   # Formatting stuff
   covariate_ras <- template_grid
-  terra::values(covariate_ras) <- cell_counts$prob
+  terra::values(covariate_ras) <- cell_counts$prob + vps_baseline
 
   covariate_mtx <- t(as.matrix(covariate_ras, wide = T))
   covariate_mtx <- covariate_mtx[, ncol(covariate_mtx):1]
@@ -57,7 +59,7 @@ if (spatial_type == "VPS_map") {
     project("ESRI:102003")
   
   covariate_ras <- rasterize(hbmap, template_grid, touches = T)
-  terra::values(covariate_ras)[is.nan(terra::values(covariate_ras))] <- 0
+  terra::values(covariate_ras)[is.nan(terra::values(covariate_ras))] <- vps_baseline
   
   covariate_mtx <- t(as.matrix(covariate_ras, wide = T))
   covariate_mtx <- covariate_mtx[, ncol(covariate_mtx):1]
@@ -76,6 +78,12 @@ resoln <- res(covariate_ras)[1]
 
 # Get the informed prior for sigma
 log_sigma_estimate <- read_csv("pipeline_FL/FL_results/log_sigma_estimate_FL.csv")
+if (sigma_type == "Mean") {
+  log_sigma_estimate <- log_sigma_estimate %>% filter(type == "mean")
+} else {
+  log_sigma_estimate <- log_sigma_estimate %>% filter(type == "variability")
+}
+
 
 #### Load both days of ROV data ####
 
@@ -331,8 +339,9 @@ s_init <- initialize_s(
   habitatMask = covariate_mtx,
   spatial_beta = 0.5
 )
-sigma_init <- exp(4.5)
-log_sigma_init <- 4.5
+# log_sigma_init <- constants$log_sigma_prior_mean
+log_sigma_init <- 3 # <- need this to be high enough that there are no 0-prob cameras from random initial locs
+sigma_init <- exp(log_sigma_init)
 p0_init <- rep(0.8, 3)
 y.true.init <- initialize_ytrue(M,
                                 z_init, 
@@ -356,6 +365,7 @@ Niminits <- list(z = z_init,
                  p0 = p0_init, 
                  sigma = sigma_init,
                  log_sigma = log_sigma_init,
+                 ROV_offset = 1,
                  spatial_beta = 0.3)
 
 

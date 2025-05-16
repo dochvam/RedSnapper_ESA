@@ -71,6 +71,11 @@ resoln <- res(covariate_ras)[1]
 
 # Get the informed prior for sigma
 log_sigma_estimate <- read_csv("pipeline_NC/NC_results/log_sigma_estimate_NC.csv")
+if (sigma_type == "Mean") {
+  log_sigma_estimate <- log_sigma_estimate %>% filter(type == "mean")
+} else {
+  log_sigma_estimate <- log_sigma_estimate %>% filter(type == "variability")
+}
 
 #### Load both days of ROV data ####
 
@@ -249,7 +254,9 @@ constants <- list(M = M,
                   rb_weights = intersections_df$weight,
                   rov_cell_xvec = intersections_df$x_ind,
                   rov_cell_yvec = intersections_df$y_ind,
-                  rbe = rbe, rbs = rbs)
+                  rbe = rbe, rbs = rbs,
+                  sigma_type = sigma_type
+                  )
 
 
 z_init <- rbinom(M, 1, 0.5)
@@ -261,8 +268,8 @@ s_init <- initialize_s(
   habitatMask = covariate_mtx,
   spatial_beta = 0.5
 )
-sigma_init <- exp(4.5)
-log_sigma_init <- 4.5
+log_sigma_init <- constants$log_sigma_prior_mean
+sigma_init <- exp(log_sigma_init)
 p0_init <- rep(0.8, 3)
 y.true.init <- initialize_ytrue(M,
                                 z_init, 
@@ -286,6 +293,7 @@ Niminits <- list(z = z_init,
                  p0 = p0_init, 
                  sigma = sigma_init,
                  log_sigma = log_sigma_init,
+                 ROV_offset = 1,
                  spatial_beta = 0.3)
 
 

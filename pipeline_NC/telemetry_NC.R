@@ -74,7 +74,6 @@ all_results <- list()
 pb <- progress::progress_bar$new(total = nrow(all_IDs))
 
 num_points <- c()
-
 for (i in 1:nrow(all_IDs)) {
   pb$tick()
   this_dat <- fish_pts %>% 
@@ -107,7 +106,7 @@ for (i in 1:nrow(all_IDs)) {
         sum((mtx - matrix(centroid, nrow(mtx), 2, byrow=TRUE))^2) / (2 * (nrow(mtx)-1))
     }
   }
-  result_df <- data.frame(var = estimated_variance,
+  all_results[[i]] <- data.frame(var = estimated_variance,
                           random_start = random_start,
                           random_start_real = random_start_real,
                           x = centroid_x,
@@ -117,18 +116,24 @@ for (i in 1:nrow(all_IDs)) {
                           FullId = all_IDs$FullId[i])
 }
 
+result_df <- bind_rows(all_results)
 
 write_csv(result_df, "pipeline_NC/NC_results/all_intervals_sigma.csv")
 
 result_df <- read_csv("pipeline_NC/NC_results/all_intervals_sigma.csv") %>% 
   filter(!is.na(var))
 
-log_sigma_summary <- result_df %>% 
-  summarize(mean = mean(log(sqrt(var))),
-            median = median(log(sqrt(var))),
-            sd = sd(log(sqrt(var))),
-            q25 = quantile(log(sqrt(var)), 0.25),
-            q75 = quantile(log(sqrt(var)), 0.75))
+library(lme4)
+lmm <- summary(lmer(log(sqrt(var)) ~ (1 | FullId), data = result_df))
+
+log_sigma_summary <- data.frame(
+  mean = c(mean(log(sqrt(result_df$var))), lmm$coefficients[1]),
+  med = c(median(log(sqrt(result_df$var))), NA),
+  sd = c(sd(log(sqrt(result_df$var))), lmm$coefficients[2]),
+  q25 = c(quantile(log(sqrt(result_df$var)), 0.25), NA),
+  q75 = c(quantile(log(sqrt(result_df$var)), 0.75), NA),
+  type = c("variability", "mean")
+)
 
 qqnorm(scale(log(sqrt(result_df$var))))
 abline(0,1)

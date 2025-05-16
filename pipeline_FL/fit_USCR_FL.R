@@ -20,14 +20,16 @@ nimbleOptions(determinePredictiveNodesInModel = FALSE)
 
 fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000, 
                            nchains = 1, nburnin = 1000, thin = 1, thin2 = 10, 
-                           spatial_type_vec, integration_type_vec) {
+                           spatial_type_vec, integration_type_vec, sigma_type_vec) {
   start_time <- Sys.time()
   
   spatial_type <- spatial_type_vec[iter]
   integration_type <- integration_type_vec[iter]
+  sigma_type <- sigma_type_vec[iter]
   
   stopifnot(spatial_type %in% c("HB_map", "VPS_map"))
-  stopifnot(integration_type %in% c("Full", "Camera_Telemetry", "Camera_ROV", "Camera_Only"))
+  stopifnot(sigma_type %in% c("Variability", "Mean", "None"))
+  stopifnot(integration_type %in% c("Full_Offset", "Full_NoOffset", "Camera_Only"))
   
   stopifnot(M %% 2 == 0)
   set.seed(14432 + iter * 222) # set seed based on "iter" for reproducibility
@@ -42,7 +44,7 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
       p0[i] ~ dunif(0,1) #baseline detection probability on logit scale
     }
     
-    if (integration_type == "Camera_Telemetry" || integration_type == "Full") {
+    if (sigma_type != "None") {
       log_sigma ~ dnorm(log_sigma_prior_mean, sd = log_sigma_prior_sd) # informative prior around true log sigma
     } else {
       log_sigma ~ dunif(0, 10)
@@ -50,13 +52,9 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
     sigma <- exp(log_sigma)
     
     N ~ dpois(lambda.N) #realized abundance
-    
+
     spatial_beta ~ dnorm(1, sd = 1)
-    if (integration_type != "Camera_only_noCovar") {
-      phi[1:hm_nrow, 1:hm_ncol] <- exp(spatial_beta * log(hm[1:hm_nrow, 1:hm_ncol])) # hm is log-scale covariate
-    } else {
-      phi[1:hm_nrow, 1:hm_ncol] <- ones_mtx[1:hm_nrow, 1:hm_ncol]
-    }
+    phi[1:hm_nrow, 1:hm_ncol] <- exp(spatial_beta * log(hm[1:hm_nrow, 1:hm_ncol])) 
     
     for(i in 1:M) {
       
@@ -87,7 +85,7 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
     capcounts[1:M] <- Getcapcounts(ID=ID[1:n.samples],M=M) #intermediate object
     n <- Getncap(capcounts=capcounts[1:M])
     
-    if (integration_type == "Camera_ROV" || integration_type == "Full") {
+    if (integration_type == "Full_NoOffset" || integration_type == "Full_Offset") {
       for (i in 1:nROV) {
         # rbs and rbe are ROV buffer start/end indexes for ROV i
         pctFishInROVbuffer[i] <- calcPctFishInROVbuffer(phi = phi[1:hm_nrow, 1:hm_ncol], 
@@ -95,8 +93,13 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
                                                         rov_cell_xvec = rov_cell_xvec[rbs[i]:rbe[i]],
                                                         rov_cell_yvec = rov_cell_yvec[rbs[i]:rbe[i]],
                                                         n = rbe[i] - rbs[i] + 1)
-        ROV_obs[i] ~ dpois(pctFishInROVbuffer[i] * lambda.N * (1/3))
+        ROV_obs[i] ~ dpois(pctFishInROVbuffer[i] * lambda.N * (1/3) * ROV_offset)
       }
+    }
+    if (integration_type == "Full_Offset") {
+      ROV_offset ~ dunif(0, 10)
+    } else {
+      ROV_offset <- 1
     }
   }) #model
   
@@ -104,6 +107,12 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
   #### Build the model ####
   
   parameters <- c('lambda.N', 'p0', 'log_sigma', 'sigma', 'N', 'n', 'spatial_beta')
+  config.nodes <- c("lambda.N","p0","log_sigma","spatial_beta")
+  
+  if (integration_type == "Full_Offset") {
+    parameters <- c(parameters, "ROV_offset")
+    config.nodes <- c(config.nodes, "ROV_offset")
+  } 
   
   parameters2 <- c("ID", 's', 'z')
   
@@ -112,7 +121,6 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
   Rmodel <- nimbleModel(code=model_code, constants=constants, data=Nimdata,check=FALSE,
                         inits=Niminits)
   
-  config.nodes <- c("lambda.N","p0","log_sigma","spatial_beta")
   # config.nodes <- c()
   conf <- configureMCMC(Rmodel,monitors=parameters, thin=thin, 
                         monitors2=parameters2, thin2=thin2, nodes=config.nodes,
@@ -190,11 +198,12 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
                total_time = difftime(end_time, start_time, units = "mins"),
                integration_type = integration_type,
                spatial_type = spatial_type,
+               sigma_type = sigma_type,
                iter = iter,
                prefix = prefix,
                system = "FL_TurtleMount"
   ),
-  paste0("pipeline_FL/FL_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, "_", spatial_type, ".RDS"))
+  paste0("pipeline_FL/FL_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, "_", sigma_type, "_", spatial_type, ".RDS"))
 }
 
 cl <- makeCluster(8)
@@ -218,14 +227,31 @@ capture <- clusterEvalQ(cl, {
   
 })
 
-spatial_type <- rep(c("HB_map", "VPS_map"), each = 2)
-integration_type <- rep(c("Full", "Camera_Telemetry"), 2)
 
-parLapply(cl, 1:12, fit_uscr_binom_FL, prefix = "_Final_",
-          spatial_type_vec = rep(spatial_type, 3), 
-          integration_type_vec = rep(integration_type, 3),
-          M = 4000, nchains = 1, nburnin = 10000,
-          niter = 40000, thin = 1, thin2 = 10)
+combos <- expand.grid(
+  spatial_type  = c("HB_map", "VPS_map"),
+  integration_type = c("Full_Offset", "Camera_Only"#, "Full_NoOffset"
+                       ),
+  sigma_type = c("Mean", "Variability"#, "None"
+                 )
+) %>% 
+  as.data.frame()
+
+nchains <- 3
+
+parLapply(cl, 1:(nrow(combos)*nchains), fit_uscr_binom_FL, prefix = "_Final_",
+          spatial_type_vec = rep(combos$spatial_type, nchains),
+          integration_type_vec = rep(combos$integration_type, nchains),
+          sigma_type_vec = rep(combos$sigma_type, nchains),
+          M = 20000, nchains = 1, nburnin = 20000,
+          niter = 50000, thin = 1, thin2 = 10)
+
+# parLapply(cl, 1:4, fit_uscr_binom_FL, prefix = "_TEST_",
+#           spatial_type_vec = rep(combos$spatial_type, nchains), 
+#           integration_type_vec = rep(combos$integration_type, nchains),
+#           sigma_type_vec = rep(combos$sigma_type, nchains),
+#           M = 20000, nchains = 1, nburnin = 0,
+#           niter = 100, thin = 1, thin2 = 1)
 
 
 # fit_uscr_binom(iter = 100, prefix = "_Final_",
@@ -233,4 +259,4 @@ parLapply(cl, 1:12, fit_uscr_binom_FL, prefix = "_Final_",
 #                niter = 200000, thin = 2, thin2 = 50,
 #                integration_type = "Full")
 
-
+stopCluster(cl)
