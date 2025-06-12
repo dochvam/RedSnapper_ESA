@@ -130,7 +130,7 @@ vps_stations %>%
 plot_all_fish_heatmap <- vps_results %>%
   mutate(time_abs = as.numeric(difftime(Time, min(Time), units = "hour"))) %>%
   ggplot(aes(Longitude, Latitude)) +
-  geom_bin_2d(binwidth = ) +
+  # geom_bin_2d(binwidth = ) +
   geom_point(data = vps_stations, col = "darkorange") +
   theme_minimal() +
   scale_fill_viridis_c("Num. fixes", transform = "log",
@@ -472,3 +472,18 @@ left_join(rov_dat, lines_df, by = c("Site_ID", "Transect" = 'transect', "Date"))
   ggplot() + 
   geom_point(aes(length_reported, length_ll)) +
   geom_abline(slope = 1, intercept = 0)
+
+
+
+
+
+ggplot() + 
+  geom_spatraster(data = vps_intensity_ras) +
+  geom_spatvector(data = camera_pts, aes(shape = as.character(date)), col = "black", size = 3) +
+  # geom_spatvector(data = rov_pts, aes(shape = as.character(date)), col = "black", size = 2) +
+  theme_minimal() +
+  scale_fill_viridis_c("Num. fixes", begin = 0.1, end = 0.8, trans = "log",
+                       breaks = c(1, 20, 400, 8000)) + 
+  ggtitle("VPS intensity surface 50 m, log-scale") +
+  theme_void()
+

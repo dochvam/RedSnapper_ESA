@@ -18,14 +18,15 @@ source("uSCR_binom_Augustine/other_helper.R")
 
 nimbleOptions(determinePredictiveNodesInModel = FALSE)
 
-fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000, 
+fit_uscr_binom_NC <- function(iter, prefix, M = 500*3, niter = 10000, 
                            nchains = 1, nburnin = 1000, thin = 1, thin2 = 10, 
                            # integration_type = NULL, 
-                           integration_type_vec, sigma_type_vec) {
+                           integration_type_vec, sigma_type_vec, spatial_type_vec, M_type_vec) {
   start_time <- Sys.time()
   
   integration_type <- integration_type_vec[iter]
   sigma_type <- sigma_type_vec[iter]
+  spatial_type <- spatial_type_vec[iter]
   # if (is.null(integration_type) && !is.null(type_vec)) {
   #   integration_type <- type_vec[iter]
   # } else if (is.null(integration_type) && is.null(type_vec)) {
@@ -35,8 +36,13 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
   #               integration_type, type_vec))
   # }
   
-  stopifnot(integration_type %in% c("Full", "Camera_only"))
-  stopifnot(sigma_type       %in% c("Variability", "Mean", "None"))
+  stopifnot(spatial_type     %in% c("VPS_map", "SpConstant"))
+  stopifnot(sigma_type       %in% c("Prior_Mean", "Prior_Variability", "Trunc_prior", "Weak_prior", "Constant"))
+  stopifnot(integration_type %in% c("Full_Offset", "Full_NoOffset", "No_ROV"))
+  stopifnot(M_type_vec       %in% c("MBaseline", "MAugment"))
+  
+  if (M_type_vec[iter] == "MAugment") M <- M * 1.5
+  
   stopifnot(M %% 3 == 0)
   set.seed(14432 + iter * 333) # set seed based on "iter" for reproducibility
   
@@ -50,22 +56,28 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
       p0[i] ~ dunif(0,1) #baseline detection probability on logit scale
     }
     
-    if (sigma_type != "None") {
-      log_sigma ~ dnorm(log_sigma_prior_mean, sd = log_sigma_prior_sd) # informative prior around true log sigma
-    } else {
-      log_sigma ~ dunif(0, 10)
+    if (sigma_type == "Prior_Mean" || sigma_type == "Prior_Variability") {
+      log_sigma_long ~ dnorm(log_sigma_prior_mean, sd = log_sigma_prior_sd) # informative prior around true log sigma
+    } else if (sigma_type == "Trunc_prior") {
+      log_sigma_long ~ T(dnorm(log_sigma_prior_mean, sd = log_sigma_prior_sd), 
+                          log_sigma_prior_mean - 3*log_sigma_prior_sd, 
+                          log_sigma_prior_mean + 3*log_sigma_prior_sd)
+    } else if (sigma_type == "Constant"){
+      log_sigma_long <- log_sigma_prior_mean
     }
-    sigma <- exp(log_sigma)
+    
+    # sigma <- sqrt(exp(log_sigma_long)^2 + attraction_dist_sigma^2)
+    sigma <- exp(log_sigma_long)
     
     N ~ dpois(lambda.N) #realized abundance
 
     spatial_beta ~ dnorm(1, sd = 1)
-    # if (integration_type != "Camera_only_noCovar") {
-    phi[1:hm_nrow, 1:hm_ncol] <- exp(spatial_beta * log(hm[1:hm_nrow, 1:hm_ncol])) # hm is log-scale covariate
-    # } else {
-    #   phi[1:hm_nrow, 1:hm_ncol] <- ones_mtx[1:hm_nrow, 1:hm_ncol]
-    # }
-    
+    if (spatial_type == "SpConstant") {
+      phi[1:hm_nrow, 1:hm_ncol] <- exp(0 * log(hm[1:hm_nrow, 1:hm_ncol])) 
+    } else {
+      phi[1:hm_nrow, 1:hm_ncol] <- exp(spatial_beta * log(hm[1:hm_nrow, 1:hm_ncol])) 
+    }
+
     for(i in 1:M) {
       
       s[i, 1:2] ~ dHabDistr_asCovar(
@@ -116,8 +128,13 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
   
   #### Build the model ####
   
-  parameters <- c('lambda.N', 'p0', 'log_sigma', 'sigma', 'N', 'n', 'spatial_beta')
-  config.nodes <- c("lambda.N","p0","log_sigma","spatial_beta")
+  if (sigma_type == "Constant") {
+    parameters <- c('lambda.N', 'p0','log_sigma_long', 'sigma', 'N', 'n', 'spatial_beta')
+    config.nodes <- c("lambda.N", "p0","spatial_beta")
+  } else {
+    parameters <- c('lambda.N', 'p0', 'log_sigma_long', 'sigma', 'N', 'n', 'spatial_beta')
+    config.nodes <- c("lambda.N","p0","log_sigma_long","spatial_beta")
+  }
   
   if (integration_type == "Full_Offset") {
     parameters <- c(parameters, "ROV_offset")
@@ -176,10 +193,13 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
     #scale parameter here is just the starting scale. It will be tuned.
   }
   
-  #use block update for  correlated posteriors. Can use "tries" to control how many times per iteration
-  conf$addSampler(target = c("p0","log_sigma","lambda.N"),
-                  type = 'RW_block',control = list(adaptive=TRUE,tries=1),silent = TRUE)
-  
+  if (sigma_type == "Constant") {
+    conf$addSampler(target = c("p0","lambda.N"),
+                    type = 'RW_block',control = list(adaptive=TRUE,tries=1),silent = TRUE)
+  } else {
+    conf$addSampler(target = c("p0","log_sigma_long","lambda.N"),
+                    type = 'RW_block',control = list(adaptive=TRUE,tries=1),silent = TRUE)
+  }
   
   # Build and compile
   Rmcmc <- buildMCMC(conf)
@@ -210,18 +230,21 @@ fit_uscr_binom <- function(iter, prefix, M = 500*3, niter = 10000,
                total_time = difftime(end_time, start_time, units = "mins"),
                integration_type = integration_type,
                sigma_type = sigma_type,
+               spatial_type = spatial_type,
+               M_type = M_type_vec[iter],
                iter = iter,
                prefix = prefix,
                system = "NC_ChickenRock"
   ),
-  paste0("pipeline_NC/NC_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, "_", sigma_type, ".RDS"))
+  paste0("pipeline_NC/NC_results/uSCR_real_Augustine_Binom", prefix, iter, 
+         "_", integration_type, "_", sigma_type, "_", spatial_type, "_", M_type_vec[iter], ".RDS"))
 }
 
 
 
 # type_vec <- c("Full", "Camera_only", "Camera_ROV", "Camera_Telemetry", "Camera_only_noCovar")
 
-cl <- makeCluster(6)
+cl <- makeCluster(8)
 
 capture <- clusterEvalQ(cl, {
   library(tidyverse)
@@ -243,27 +266,30 @@ capture <- clusterEvalQ(cl, {
 })
 
 combos <- expand.grid(
-  integration_type = c("Full_Offset", "Full_NoOffset", "Camera_only"),
-  sigma_type = c("Mean", "Variability")#, "None")
+# integration_type = c("Full_Offset", "Full_NoOffset", "Camera_Only"),
+  integration_type = c("Full_Offset"),
+  # integration_type = c("Full_NoOffset"),
+  # sigma_type = c("Constant", "Prior", "Trunc_prior")
+  sigma_type = c("Prior_Mean", "Prior_Variability")
 )
 
-nchains <- 3
-# parLapply(cl, 
-#           X = 1:(nrow(combos)*nchains),
-#           fun = fit_uscr_binom, 
-#           integration_type_vec = rep(combos$integration_type, each = nchains),
-#           sigma_type_vec = rep(combos$sigma_type, each = nchains),
-#           prefix = "_20minSigma_ScalePrior_",
-#           M = 6000, nchains = 1, nburnin = 20000,
-#           niter = 50000, thin = 2, thin2 = 50)
-parLapply(cl, 
-          X = 1:6,
-          fun = fit_uscr_binom, 
+nchains <- 4
+parLapply(cl,
+          X = 1:(nrow(combos)*nchains),
+          fun = fit_uscr_binom_NC,
           integration_type_vec = rep(combos$integration_type, each = nchains),
           sigma_type_vec = rep(combos$sigma_type, each = nchains),
-          prefix = "_20minSigma_ScalePrior_",
-          M = 6000, nchains = 1, nburnin = 20000,
+          prefix = "_FinalChoices_",
+          M = 9000, nchains = 1, nburnin = 20000,
           niter = 50000, thin = 2, thin2 = 50)
+# parLapply(cl,
+#           X = 1:3*3,
+#           fun = fit_uscr_binom_NC,
+#           integration_type_vec = rep(combos$integration_type, each = nchains),
+#           sigma_type_vec = rep(combos$sigma_type, each = nchains),
+#           prefix = "_ThreeScaleSigma_",
+#           M = 3000, nchains = 2, nburnin = 0,
+#           niter = 200, thin = 1, thin2 = 1)
 
 
 

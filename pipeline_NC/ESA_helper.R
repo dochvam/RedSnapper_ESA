@@ -1,4 +1,14 @@
-calc_ESA <- function(result_list, distr, prefix_out, write.out = F) {
+calc_ESA <- function(result_list, distr, prefix_out, esa_sigma_type, 
+                     log_sigma_estimate = NULL, 
+                     write.out = F, nframe = 41, thin = 10) {
+  
+  stopifnot(esa_sigma_type %in% c("20-min", 
+                                  "NB attraction dist",
+                                  "NB attraction dist plus 20-min",
+                                  "as modeled"))
+  
+  attraction_dist_mean <- 24.3870801
+  attraction_dist_sd <- 4.188949
   
   temp <- result_list
   
@@ -12,15 +22,37 @@ calc_ESA <- function(result_list, distr, prefix_out, write.out = F) {
     as.data.frame() %>% 
     mutate(dist = sqrt(x^2 + y^2))
   
+  if (esa_sigma_type == "as modeled") {
+    this_sigma <- samples_mtx[, "sigma"]
+  } else if (esa_sigma_type == "NB attraction dist plus 20-min") {
+    this_logsigma <- rnorm(nrow(samples_mtx), 
+                           log_sigma_estimate$mean[log_sigma_estimate$t_interval == 20 & log_sigma_estimate$type == "mean"],
+                           log_sigma_estimate$sd[log_sigma_estimate$t_interval == 20 & log_sigma_estimate$type == "mean"])
+    
+    attraction_dist <- rnorm(nrow(samples_mtx), attraction_dist_mean, attraction_dist_sd)
+    
+    this_sigma <- sqrt(exp(this_logsigma)^2 + attraction_dist^2)
+  } else if (esa_sigma_type == "NB attraction dist") {
+    attraction_dist <- rnorm(nrow(samples_mtx), attraction_dist_mean, attraction_dist_sd)
+    this_sigma <- attraction_dist
+  } else if (esa_sigma_type == "20-min") {
+    this_logsigma <- rnorm(nrow(samples_mtx), 
+                           log_sigma_estimate$mean[log_sigma_estimate$t_interval == 20 & log_sigma_estimate$type == "mean"],
+                           log_sigma_estimate$sd[log_sigma_estimate$t_interval == 20 & log_sigma_estimate$type == "mean"])
+    this_sigma <- exp(this_logsigma)
+  }
+  
+  
   # Matrix of posterior distributions for the ESA
   # Each column represents a current direction
   esa_posterior <- matrix(NA, nrow = nrow(samples_mtx), ncol = 3)
   
   # Loop over the posterior samples
-  for (i in 1:nrow(samples_mtx)) {
+  for (i in 10 * 1:(nrow(samples_mtx)/thin)) {
     # What's the probability that we get at least one detection at a trap placed 
     # at 0,0 given the fish's centroid is in each grid coord?
     if (distr == "Pois") {
+      stop()
       for (j in 1:3) {
         lambda <- samples_mtx[i, paste0("lam0[", j, "]")] * exp(-grid$dist^2 / (2 * samples_mtx[i, "sigma"]^2))
         prob_one_det <- 1-exp(-lambda)
@@ -29,6 +61,7 @@ calc_ESA <- function(result_list, distr, prefix_out, write.out = F) {
       
     } else if (distr == "NB") {
       for (j in 1:3) {
+        stop()
         lambda <- samples_mtx[i, paste0("lam0[", j, "]")] * exp(-grid$dist^2 / (2 * samples_mtx[i, "sigma"]^2))
         size_NB <- 1 / samples_mtx[i, "phi_CT"]
         prob_NB <- 1 / (1 + samples_mtx[i, "phi_CT"] * lambda)
@@ -37,7 +70,12 @@ calc_ESA <- function(result_list, distr, prefix_out, write.out = F) {
       }
     } else if (distr == "Binom") {
       for (j in 1:3) {
-        esa_posterior[i, j] <- (samples_mtx[i, "sigma"] * sqrt(2 * samples_mtx[i, paste0("p0[", j, "]")]))^2 * base::pi # from half-normal EDD
+
+        p <- samples_mtx[i, paste0("p0[", j, "]")] * exp(-grid$dist^2 /(2*this_sigma[i]^2))
+        p_k <- (1 - (1-p)^nframe)
+        esa_posterior[i, j] <- sum(p_k * cell_area)
+        
+        # esa_posterior[i, j] <- (samples_mtx[i, "sigma"] * sqrt(2 * samples_mtx[i, paste0("p0[", j, "]")]))^2 * base::pi # from half-normal EDD
       }
     } else {
       stop("Unrecognized distribution")
@@ -47,9 +85,11 @@ calc_ESA <- function(result_list, distr, prefix_out, write.out = F) {
   ESA_df <- data.frame(
     current_dir = c("Towards", "Away", "Across"),
     distr = distr,
-    ESA_q50 = apply(esa_posterior, 2, median),
-    ESA_q025 = apply(esa_posterior, 2, quantile, prob = 0.025),
-    ESA_q975 = apply(esa_posterior, 2, quantile, prob = 0.975)
+    mean = apply(esa_posterior, 2, mean, na.rm = T),
+    sd = apply(esa_posterior, 2, sd, na.rm = T),
+    ESA_q50 = apply(esa_posterior, 2, median, na.rm = T),
+    ESA_q025 = apply(esa_posterior, 2, quantile, prob = 0.025, na.rm = T),
+    ESA_q975 = apply(esa_posterior, 2, quantile, prob = 0.975, na.rm = T)
   )
   
   if (write.out) {

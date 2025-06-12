@@ -1,0 +1,183 @@
+library(tidyverse)
+library(nimble)
+library(gridExtra)
+library(coda)
+library(MCMCvis)
+library(gridExtra)
+
+
+results_files_all <- list.files("pipeline_NC/NC_results/", 
+                                 pattern = "uSCR_real_Augustine_Binom_Compare*.*RDS",
+                                 full.names = TRUE)
+
+combos <- expand.grid(
+  integration_type = c("Full_Offset", "Full_NoOffset", "Camera_Only"),
+  sigma_type = c("Mean", "Variability")#, "None")
+)
+
+
+samples_list_list <- list()
+summary_list <- list()
+for (i in 1:nrow(combos)) {
+  this_resfiles <- results_files_all[grepl(paste0(combos$integration_type[i], "_", combos$sigma_type[i]),
+                                           results_files_all)]
+  
+  samples_list_list[[i]] <- lapply(this_resfiles, function(x) readRDS(x)$samples) %>% 
+    as.mcmc.list()
+  summary_list[[i]] <- MCMCsummary(samples_list_list[[i]]) %>%
+    mutate(integration_type = combos$integration_type[i],
+           sigma_type = combos$sigma_type[i])
+  summary_list[[i]]$param <- rownames(summary_list[[i]])
+  rownames(summary_list[[i]]) <- NULL
+    
+}
+
+
+
+summary_df <- bind_rows(summary_list) %>% 
+  mutate(type = paste0(integration_type, "_", sigma_type))
+
+
+#### Multi-plot visualization - model comparison ####
+type_colors <- c(
+  viridisLite::plasma(length(unique(combos$integration_type)), end = 0.9), "darkgray", "black"
+)
+names(type_colors) <- c(
+  unique(as.character(combos$integration_type)),
+  "Prior",
+  "Zulian et al. ESA"
+)
+
+capwords <- function(s, strict = FALSE) {
+  cap <- function(s) paste(toupper(substring(s, 1, 1)),
+                           {s <- substring(s, 2); if(strict) tolower(s) else s},
+                           sep = "", collapse = " " )
+  sapply(strsplit(s, split = " "), cap, USE.NAMES = !is.null(names(s)))
+}
+
+log_sigma_estimate <- read_csv("pipeline_NC/NC_results/log_sigma_estimate_NC.csv") %>% 
+  mutate(sigma_type = capwords(type), integration_type = "Prior")
+
+# Plot posterior distribution of sigma, 
+plot_p0 <- summary_df %>% 
+  filter(grepl("p0", param)) %>% 
+  mutate(dir_num = parse_number(substr(param,4,4)),
+         dir = c("Towards", "Away", "Across")[dir_num]) %>% 
+  ggplot() +
+  geom_pointrange(aes(dir, mean, ymin = `2.5%`, ymax = `97.5%`, col = integration_type,
+                      group = type, shape = sigma_type), position = position_dodge(width = 0.4)) +
+  theme_bw() +
+  scale_color_manual("Model", values = type_colors) +
+  coord_flip() + xlab("") + ggtitle("Baseline detection prob.") +
+  ylab("95%CI") + theme(legend.position = "None") +
+  scale_shape_manual("Prior type", values = c(1, 19))
+
+plot_sigma <- summary_df %>% 
+  filter(grepl("^sigma", param)) %>% 
+  bind_rows(tibble(
+    integration_type = "Prior", param = "sigma",
+    sigma_type = c(log_sigma_estimate$sigma_type),
+    type = paste0("Prior_", log_sigma_estimate$sigma_type),
+    mean = exp(log_sigma_estimate$mean), 
+    `2.5%` = exp(log_sigma_estimate$mean - 1.96 * log_sigma_estimate$sd),
+    `97.5%` = exp(log_sigma_estimate$mean + 1.96 * log_sigma_estimate$sd)
+  )) %>% 
+  ggplot() +
+  geom_pointrange(aes(param, mean, ymin = `2.5%`, ymax = `97.5%`, col = integration_type,
+                      group = type, shape = sigma_type), position = position_dodge(width = 0.9)) +
+  theme_bw() +
+  scale_color_manual("Model", values = type_colors) +
+  coord_flip() + xlab("") + ggtitle("Displacement param. (m)") +
+  ylab("95%CI (m)") + theme(legend.position = "None") +
+  scale_shape_manual("Prior type", values = c(1, 19))
+
+
+plot_N <- summary_df %>% 
+  filter(grepl("^N", param)) %>% 
+  ggplot() +
+  geom_pointrange(aes(param, mean/3, ymin = `2.5%`/3, ymax = `97.5%`/3, col = integration_type,
+                      group = type, shape = sigma_type), position = position_dodge(width = 0.4)) +
+  theme_bw() +
+  scale_color_manual("Model", values = type_colors) +
+  coord_flip() + xlab("") + ggtitle("Population size") +
+  ylab("95%CI (number of fish)") + theme(legend.position = "None") +
+  scale_shape_manual("Prior type", values = c(1, 19))
+
+plot_beta <- summary_df %>% 
+  filter(grepl("^spatial_beta", param)) %>% 
+  filter(integration_type != "Camera_only_noCovar") %>% 
+  ggplot() +
+  geom_pointrange(aes(param, mean, ymin = `2.5%`, ymax = `97.5%`, col = integration_type,
+                      group = type, shape = sigma_type), position = position_dodge(width = 0.4)) +
+  theme_bw() +
+  scale_color_manual("Model", values = type_colors) +
+  coord_flip() + xlab("") + ggtitle("Covar. effect") +
+  ylab("95%CI") +
+  scale_shape_manual("Prior type", values = c(1, 19))
+
+
+source("pipeline_NC/ESA_helper.R")
+
+ESA_list <- list()
+for (i in 1:nrow(combos)) {
+  ESA_list[[i]] <- calc_ESA(result_list = list(samples = samples_list_list[[i]]), distr = "Binom") %>% 
+    mutate(integration_type = summary_list[[i]]$integration_type[1], 
+           sigma_type = summary_list[[i]]$sigma_type[1],
+           type = paste0(integration_type, "_", sigma_type))
+}
+
+
+plot_ESA <- ESA_list %>% 
+  bind_rows() %>% 
+  ggplot() +
+  geom_pointrange(aes(current_dir, ESA_q50, ymin = ESA_q025, ymax = ESA_q975, col = integration_type,
+                      group = type, shape = sigma_type), position = position_dodge(width = 0.4)) +
+  theme_bw() +
+  scale_color_manual("Model", values = type_colors) +
+  coord_flip() + xlab("") + 
+  ggtitle("ESA") +
+  ylab("95%CI (m^2)") + theme(legend.position = "None") +
+  scale_shape_manual("Prior type", values = c(1, 19))
+
+plot_ESA_compare <- ESA_list %>% 
+  bind_rows() %>% 
+  bind_rows(
+    data.frame(
+      type = "Zulian et al. ESA", 
+      integration_type = "Zulian et al. ESA", sigma_type = "Mean",
+      current_dir = c("Away", "Across", "Towards"),
+      ESA_q50  = c(0.047, 0.064, 0.009) * 1e6, 
+      ESA_q025 = c(0.006, 0.012, 0.002) * 1e6, 
+      ESA_q975 = c(0.332, 0.346, 0.038) * 1e6
+    )
+  ) %>%
+  mutate(integration_type = factor(integration_type, levels = names(type_colors))) %>% 
+  ggplot() +
+  geom_pointrange(aes(current_dir, ESA_q50, ymin = ESA_q025, ymax = ESA_q975, col = integration_type,
+                      group = type, shape = sigma_type), position = position_dodge(width = 0.4),
+                  show.legend = TRUE) +
+  theme_bw() +
+  scale_color_manual("Model", values = type_colors, drop = FALSE) +
+  coord_flip() + xlab("") + 
+  ggtitle("ESA (incl. previous estimate)") +
+  ylab("95%CI (m^2)") +
+  scale_shape_manual("Prior type", values = c(1, 19))
+
+modeltype_legend <- get_legend(plot_ESA_compare)
+plot_ESA_compare <- plot_ESA_compare + theme(legend.position = "None")
+
+layout <- matrix(
+  c(1, 4,
+    2, 4,
+    3, 5,
+    3, 5),
+  ncol = 2, byrow = TRUE
+)
+
+plot_all <- arrangeGrob(plot_N, plot_sigma, plot_p0, plot_ESA, 
+                        plot_ESA_compare, layout_matrix = layout,
+                        right = modeltype_legend)
+
+ggsave("plots/USCR_20min_results.jpg", plot = plot_all, width = 10, height = 6)
+
+

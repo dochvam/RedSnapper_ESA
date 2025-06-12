@@ -71,11 +71,24 @@ resoln <- res(covariate_ras)[1]
 
 # Get the informed prior for sigma
 log_sigma_estimate <- read_csv("pipeline_NC/NC_results/log_sigma_estimate_NC.csv")
-if (sigma_type == "Mean") {
-  log_sigma_estimate <- log_sigma_estimate %>% filter(type == "mean")
+
+if (sigma_type == "Prior_Variability") {
+  log_sigma_estimate <- log_sigma_estimate %>% 
+    filter(type == "variability", t_interval == max(t_interval))
 } else {
-  log_sigma_estimate <- log_sigma_estimate %>% filter(type == "variability")
+  log_sigma_estimate <- log_sigma_estimate %>% 
+    filter(type == "mean", t_interval == max(t_interval))
 }
+
+attraction_dist_sigma <- 27.11
+
+# log_sigma_point_estimate <- log(sqrt(exp(3.49)^2 + attraction_dist_sigma^2))
+
+# if (sigma_type == "Mean") {
+#   log_sigma_estimate <- log_sigma_estimate %>% filter(type == "mean")
+# } else {
+#   log_sigma_estimate <- log_sigma_estimate %>% filter(type == "variability")
+# }
 
 #### Load both days of ROV data ####
 
@@ -236,6 +249,7 @@ ones_mtx[] <- 1
 constants <- list(M = M,
                   J = J,
                   integration_type = integration_type,
+                  spatial_type = spatial_type,
                   log_sigma_prior_mean = log_sigma_estimate$mean,
                   log_sigma_prior_sd = log_sigma_estimate$sd,
                   current_dir = camera_locs$current_dir,
@@ -255,9 +269,9 @@ constants <- list(M = M,
                   rov_cell_xvec = intersections_df$x_ind,
                   rov_cell_yvec = intersections_df$y_ind,
                   rbe = rbe, rbs = rbs,
-                  sigma_type = sigma_type
+                  sigma_type = sigma_type,
+                  attraction_dist_sigma = attraction_dist_sigma
                   )
-
 
 z_init <- rbinom(M, 1, 0.5)
 s_init <- initialize_s(
@@ -292,10 +306,12 @@ Niminits <- list(z = z_init,
                  y.true = y.true.init$ytrue2D,
                  p0 = p0_init, 
                  sigma = sigma_init,
-                 log_sigma = log_sigma_init,
                  ROV_offset = 1,
                  spatial_beta = 0.3)
 
+if (sigma_type != "Constant") {
+  Niminits[["log_sigma_long"]] <- log_sigma_init
+}
 
 Nimdata <- list(y.true=matrix(NA,nrow=(M),ncol=J),
                 ROV_obs = rov_dat$count,

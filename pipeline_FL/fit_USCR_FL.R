@@ -20,16 +20,20 @@ nimbleOptions(determinePredictiveNodesInModel = FALSE)
 
 fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000, 
                            nchains = 1, nburnin = 1000, thin = 1, thin2 = 10, 
-                           spatial_type_vec, integration_type_vec, sigma_type_vec) {
+                           spatial_type_vec, integration_type_vec, sigma_type_vec,
+                           M_type_vec) {
   start_time <- Sys.time()
   
   spatial_type <- spatial_type_vec[iter]
   integration_type <- integration_type_vec[iter]
   sigma_type <- sigma_type_vec[iter]
   
-  stopifnot(spatial_type %in% c("HB_map", "VPS_map"))
-  stopifnot(sigma_type %in% c("Variability", "Mean", "None"))
-  stopifnot(integration_type %in% c("Full_Offset", "Full_NoOffset", "Camera_Only"))
+  stopifnot(spatial_type     %in% c("HB_map", "VPS_map", "SpConstant"))
+  stopifnot(sigma_type       %in% c("Prior_Mean", "Prior_Variability", "Trunc_prior", "Weak_prior", "Constant"))
+  stopifnot(integration_type %in% c("Full_Offset", "Full_NoOffset", "No_ROV"))
+  stopifnot(M_type_vec       %in% c("MBaseline", "MAugment"))
+  
+  if (M_type_vec[iter] == "MAugment") M <- M * 1.5
   
   stopifnot(M %% 2 == 0)
   set.seed(14432 + iter * 222) # set seed based on "iter" for reproducibility
@@ -44,17 +48,28 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
       p0[i] ~ dunif(0,1) #baseline detection probability on logit scale
     }
     
-    if (sigma_type != "None") {
-      log_sigma ~ dnorm(log_sigma_prior_mean, sd = log_sigma_prior_sd) # informative prior around true log sigma
-    } else {
-      log_sigma ~ dunif(0, 10)
+    if (sigma_type == "Prior_Mean" || sigma_type == "Prior_Variability") {
+      log_sigma_long ~ dnorm(log_sigma_prior_mean, sd = log_sigma_prior_sd) # informative prior around true log sigma
+    } else if (sigma_type == "Trunc_prior") {
+      log_sigma_long ~ T(dnorm(log_sigma_prior_mean, sd = log_sigma_prior_sd), 
+                         log_sigma_prior_mean - 3*log_sigma_prior_sd, 
+                         log_sigma_prior_mean + 3*log_sigma_prior_sd)
+    } else if (sigma_type == "Weak_prior") {
+      log_sigma_long ~ dunif(0, 10)
+    }else if (sigma_type == "Constant"){
+      log_sigma_long <- log_sigma_prior_mean
     }
-    sigma <- exp(log_sigma)
+    
+    sigma <- exp(log_sigma_long)
     
     N ~ dpois(lambda.N) #realized abundance
 
-    spatial_beta ~ dnorm(1, sd = 1)
-    phi[1:hm_nrow, 1:hm_ncol] <- exp(spatial_beta * log(hm[1:hm_nrow, 1:hm_ncol])) 
+    if (spatial_type == "SpConstant") {
+      phi[1:hm_nrow, 1:hm_ncol] <- exp(0 * log(hm[1:hm_nrow, 1:hm_ncol])) 
+    } else {
+      phi[1:hm_nrow, 1:hm_ncol] <- exp(spatial_beta * log(hm[1:hm_nrow, 1:hm_ncol])) 
+    }
+      spatial_beta ~ dnorm(1, sd = 1)
     
     for(i in 1:M) {
       
@@ -106,8 +121,13 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
   
   #### Build the model ####
   
-  parameters <- c('lambda.N', 'p0', 'log_sigma', 'sigma', 'N', 'n', 'spatial_beta')
-  config.nodes <- c("lambda.N","p0","log_sigma","spatial_beta")
+  if (sigma_type == "Constant") {
+    parameters <- c('lambda.N', 'p0','log_sigma_long', 'sigma', 'N', 'n', 'spatial_beta')
+    config.nodes <- c("lambda.N", "p0","spatial_beta")
+  } else {
+    parameters <- c('lambda.N', 'p0', 'log_sigma_long', 'sigma', 'N', 'n', 'spatial_beta')
+    config.nodes <- c("lambda.N","p0","log_sigma_long","spatial_beta")
+  }
   
   if (integration_type == "Full_Offset") {
     parameters <- c(parameters, "ROV_offset")
@@ -165,8 +185,13 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
   }
   
   #use block update for  correlated posteriors. Can use "tries" to control how many times per iteration
-  conf$addSampler(target = c("p0","log_sigma","lambda.N"),
-                  type = 'RW_block',control = list(adaptive=TRUE,tries=1),silent = TRUE)
+  if (sigma_type == "Constant") {
+    conf$addSampler(target = c("p0","lambda.N"),
+                    type = 'RW_block',control = list(adaptive=TRUE,tries=1),silent = TRUE)
+  } else {
+    conf$addSampler(target = c("p0","log_sigma_long","lambda.N"),
+                    type = 'RW_block',control = list(adaptive=TRUE,tries=1),silent = TRUE)
+  }
   
   
   # Build and compile
@@ -199,11 +224,13 @@ fit_uscr_binom_FL <- function(iter, prefix, M = 500*2, niter = 10000,
                integration_type = integration_type,
                spatial_type = spatial_type,
                sigma_type = sigma_type,
+               M_type = M_type_vec[iter],
                iter = iter,
                prefix = prefix,
                system = "FL_TurtleMount"
   ),
-  paste0("pipeline_FL/FL_results/uSCR_real_Augustine_Binom", prefix, iter, "_", integration_type, "_", sigma_type, "_", spatial_type, ".RDS"))
+  paste0("pipeline_FL/FL_results/uSCR_real_Augustine_Binom", prefix, iter, "_", 
+         integration_type, "_", sigma_type, "_", spatial_type, "_", M_type_vec[iter], ".RDS"))
 }
 
 cl <- makeCluster(8)
@@ -229,29 +256,29 @@ capture <- clusterEvalQ(cl, {
 
 
 combos <- expand.grid(
-  spatial_type  = c("HB_map", "VPS_map"),
-  integration_type = c("Full_Offset", "Camera_Only"#, "Full_NoOffset"
-                       ),
-  sigma_type = c("Mean", "Variability"#, "None"
-                 )
+  spatial_type  = c("VPS_map"),
+  integration_type = c("Full_Offset", "No_ROV"),
+  sigma_type = c("Prior_Mean", "Prior_Variability", "Weak_prior"),
+  M_type = c("MBaseline", "MAugment")
 ) %>% 
   as.data.frame()
 
-nchains <- 3
+nchains <- 4
 
-parLapply(cl, 1:(nrow(combos)*nchains), fit_uscr_binom_FL, prefix = "_Final_",
+parLapply(cl, 1:(nrow(combos)*nchains), fit_uscr_binom_FL, prefix = "_FinalChoices_",
           spatial_type_vec = rep(combos$spatial_type, nchains),
           integration_type_vec = rep(combos$integration_type, nchains),
           sigma_type_vec = rep(combos$sigma_type, nchains),
-          M = 20000, nchains = 1, nburnin = 20000,
-          niter = 50000, thin = 1, thin2 = 10)
+          M_type_vec = rep(combos$M_type, nchains),
+          M = 15000, nchains = 1, nburnin = 40000,
+          niter = 100000, thin = 1, thin2 = 20)
 
-# parLapply(cl, 1:4, fit_uscr_binom_FL, prefix = "_TEST_",
-#           spatial_type_vec = rep(combos$spatial_type, nchains), 
-#           integration_type_vec = rep(combos$integration_type, nchains),
-#           sigma_type_vec = rep(combos$sigma_type, nchains),
-#           M = 20000, nchains = 1, nburnin = 0,
-#           niter = 100, thin = 1, thin2 = 1)
+# parLapply(cl, 1:6, fit_uscr_binom_FL, prefix = "_TEST_",
+#           spatial_type_vec = rep(combos$spatial_type, 1),
+#           integration_type_vec = rep(combos$integration_type, 1),
+#           sigma_type_vec = rep(combos$sigma_type, 1),
+#           M = 10000, nchains = 1, nburnin = 0,
+#           niter = 1000, thin = 1, thin2 = 1)
 
 
 # fit_uscr_binom(iter = 100, prefix = "_Final_",

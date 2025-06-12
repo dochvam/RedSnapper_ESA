@@ -49,7 +49,7 @@ if (spatial_type == "VPS_map") {
   
   # Formatting stuff
   covariate_ras <- template_grid
-  terra::values(covariate_ras) <- cell_counts$prob + vps_baseline
+  terra::values(covariate_ras) <- cell_counts$prob
 
   covariate_mtx <- t(as.matrix(covariate_ras, wide = T))
   covariate_mtx <- covariate_mtx[, ncol(covariate_mtx):1]
@@ -77,12 +77,24 @@ grid_bbox[3:4] <- grid_bbox[3:4] - y_offset
 resoln <- res(covariate_ras)[1]
 
 # Get the informed prior for sigma
-log_sigma_estimate <- read_csv("pipeline_FL/FL_results/log_sigma_estimate_FL.csv")
-if (sigma_type == "Mean") {
-  log_sigma_estimate <- log_sigma_estimate %>% filter(type == "mean")
+log_sigma_estimate <- read_csv("pipeline_FL/FL_results/log_sigma_estimate_FL.csv") 
+
+if (sigma_type == "Prior_Variability") {
+  log_sigma_estimate <- log_sigma_estimate %>% 
+    filter(type == "variability", t_interval == max(t_interval))
 } else {
-  log_sigma_estimate <- log_sigma_estimate %>% filter(type == "variability")
+  log_sigma_estimate <- log_sigma_estimate %>% 
+    filter(type == "mean", t_interval == max(t_interval))
 }
+
+attraction_dist_sigma <- 27.11
+
+# log_sigma_estimate <- read_csv("pipeline_FL/FL_results/log_sigma_estimate_FL.csv")
+# if (sigma_type == "Mean") {
+#   log_sigma_estimate <- log_sigma_estimate %>% filter(type == "mean")
+# } else {
+#   log_sigma_estimate <- log_sigma_estimate %>% filter(type == "variability")
+# }
 
 
 #### Load both days of ROV data ####
@@ -308,6 +320,7 @@ ones_mtx[] <- 1
 constants <- list(M = M,
                   J = J,
                   integration_type = integration_type,
+                  spatial_type = spatial_type,
                   log_sigma_prior_mean = log_sigma_estimate$mean,
                   log_sigma_prior_sd = log_sigma_estimate$sd,
                   current_dir = camera_locs$current_dir,
@@ -326,7 +339,9 @@ constants <- list(M = M,
                   rb_weights = intersections_df$weight,
                   rov_cell_xvec = intersections_df$x_ind,
                   rov_cell_yvec = intersections_df$y_ind,
-                  rbe = rbe, rbs = rbs
+                  rbe = rbe, rbs = rbs,
+                  sigma_type = sigma_type,
+                  attraction_dist_sigma = attraction_dist_sigma
                   )
 
 
@@ -340,7 +355,7 @@ s_init <- initialize_s(
   spatial_beta = 0.5
 )
 # log_sigma_init <- constants$log_sigma_prior_mean
-log_sigma_init <- 3 # <- need this to be high enough that there are no 0-prob cameras from random initial locs
+log_sigma_init <- constants$log_sigma_prior_mean
 sigma_init <- exp(log_sigma_init)
 p0_init <- rep(0.8, 3)
 y.true.init <- initialize_ytrue(M,
@@ -364,9 +379,12 @@ Niminits <- list(z = z_init,
                  y.true = y.true.init$ytrue2D,
                  p0 = p0_init, 
                  sigma = sigma_init,
-                 log_sigma = log_sigma_init,
                  ROV_offset = 1,
                  spatial_beta = 0.3)
+
+if (sigma_type != "Constant") {
+  Niminits[["log_sigma_long"]] <- log_sigma_init
+}
 
 
 Nimdata <- list(y.true=matrix(NA,nrow=(M),ncol=J),
